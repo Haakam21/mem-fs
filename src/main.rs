@@ -4,6 +4,7 @@ mod format;
 mod path;
 mod queries;
 mod state;
+mod util;
 
 use clap::{Parser, Subcommand};
 use std::env;

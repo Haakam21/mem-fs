@@ -2,29 +2,18 @@ use anyhow::Result;
 use std::path::Path;
 use turso::{Builder, Connection, Database};
 
-/// Open (or create) a Turso database at the given path.
-/// If `MEMFS_TURSO_URL` and `MEMFS_TURSO_TOKEN` are set, uses remote sync mode.
-/// Otherwise, uses local-only mode.
-pub async fn open(db_path: &str) -> Result<Database> {
-    let path = expand_tilde(db_path);
+use crate::util;
 
-    // Ensure parent directory exists
+/// Open (or create) a Turso database at the given path.
+// TODO: Support Turso Cloud sync via MEMFS_TURSO_URL + MEMFS_TURSO_TOKEN
+pub async fn open(db_path: &str) -> Result<Database> {
+    let path = util::expand_tilde(db_path);
+
     if let Some(parent) = Path::new(&path).parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    let turso_url = std::env::var("MEMFS_TURSO_URL").ok();
-    let turso_token = std::env::var("MEMFS_TURSO_TOKEN").ok();
-
-    let db = match (turso_url, turso_token) {
-        (Some(_url), Some(_token)) => {
-            // TODO: Enable sync mode once we test with Turso Cloud
-            // For now, fall through to local-only
-            Builder::new_local(&path).build().await?
-        }
-        _ => Builder::new_local(&path).build().await?,
-    };
-
+    let db = Builder::new_local(&path).build().await?;
     Ok(db)
 }
 
@@ -74,19 +63,12 @@ pub async fn migrate(conn: &Connection) -> Result<()> {
     )
     .await?;
 
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_memories_filename ON memories (filename)",
+        (),
+    )
+    .await?;
+
     Ok(())
 }
 
-/// Expand `~` to HOME directory.
-fn expand_tilde(path: &str) -> String {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return format!("{}/{}", home, rest);
-        }
-    } else if path == "~" {
-        if let Ok(home) = std::env::var("HOME") {
-            return home;
-        }
-    }
-    path.to_string()
-}

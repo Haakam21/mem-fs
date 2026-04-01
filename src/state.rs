@@ -2,10 +2,12 @@ use anyhow::Result;
 use std::fs;
 use std::path::Path;
 
+use crate::util;
+
 /// Read the current virtual working directory from the state file.
 /// Returns `None` if the file doesn't exist or is empty (not in virtual FS).
 pub fn read(state_path: &str) -> Result<Option<String>> {
-    let path = expand_tilde(state_path);
+    let path = util::expand_tilde(state_path);
     if !Path::new(&path).exists() {
         return Ok(None);
     }
@@ -20,7 +22,7 @@ pub fn read(state_path: &str) -> Result<Option<String>> {
 
 /// Write the current virtual working directory to the state file.
 pub fn write(state_path: &str, cwd: &str) -> Result<()> {
-    let path = expand_tilde(state_path);
+    let path = util::expand_tilde(state_path);
     if let Some(parent) = Path::new(&path).parent() {
         fs::create_dir_all(parent)?;
     }
@@ -30,7 +32,7 @@ pub fn write(state_path: &str, cwd: &str) -> Result<()> {
 
 /// Clear the state file (user exited the virtual FS).
 pub fn clear(state_path: &str) -> Result<()> {
-    let path = expand_tilde(state_path);
+    let path = util::expand_tilde(state_path);
     if Path::new(&path).exists() {
         fs::write(&path, "")?;
     }
@@ -42,23 +44,6 @@ pub fn in_virtual_fs(state_path: &str) -> bool {
     read(state_path).ok().flatten().is_some()
 }
 
-/// Expand `~` at the start of a path to the user's home directory.
-fn expand_tilde(path: &str) -> String {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = dirs_home() {
-            return format!("{}/{}", home, rest);
-        }
-    } else if path == "~" {
-        if let Some(home) = dirs_home() {
-            return home;
-        }
-    }
-    path.to_string()
-}
-
-fn dirs_home() -> Option<String> {
-    std::env::var("HOME").ok()
-}
 
 #[cfg(test)]
 mod tests {

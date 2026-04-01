@@ -17,9 +17,7 @@ pub struct Engine {
 pub struct LsEntry {
     pub name: String,
     pub is_dir: bool,
-    pub created_at: Option<String>,
     pub updated_at: Option<String>,
-    pub tag_count: usize,
     pub content_len: usize,
 }
 
@@ -30,6 +28,11 @@ impl Engine {
             state_path,
             mount_point,
         }
+    }
+
+    /// Get the current filters from the virtual CWD, or empty if not in virtual FS.
+    fn current_filters(&self) -> Result<Vec<Filter>> {
+        Ok(self.current_path()?.map(|p| p.filters).unwrap_or_default())
     }
 
     /// Get the current parsed path from state.
@@ -96,9 +99,7 @@ impl Engine {
                 entries.push(LsEntry {
                     name: f,
                     is_dir: true,
-                    created_at: None,
                     updated_at: None,
-                    tag_count: 0,
                     content_len: 0,
                 });
             }
@@ -110,9 +111,7 @@ impl Engine {
                 entries.push(LsEntry {
                     name: v,
                     is_dir: true,
-                    created_at: None,
                     updated_at: None,
-                    tag_count: 0,
                     content_len: 0,
                 });
             }
@@ -123,9 +122,7 @@ impl Engine {
                 entries.push(LsEntry {
                     name: f,
                     is_dir: true,
-                    created_at: None,
                     updated_at: None,
-                    tag_count: 0,
                     content_len: 0,
                 });
             }
@@ -135,9 +132,7 @@ impl Engine {
                 entries.push(LsEntry {
                     name: m.filename,
                     is_dir: false,
-                    created_at: Some(m.created_at),
                     updated_at: Some(m.updated_at),
-                    tag_count: m.tags.len(),
                     content_len: m.content.len(),
                 });
             }
@@ -156,11 +151,7 @@ impl Engine {
 
     /// Display a memory's content.
     pub async fn cat(&self, filename: &str) -> Result<Memory> {
-        let parsed = self.current_path()?;
-        let filters: Vec<Filter> = match &parsed {
-            Some(p) => p.filters.clone(),
-            None => vec![],
-        };
+        let filters = self.current_filters()?;
         match queries::get_memory(&self.conn, filename, &filters).await? {
             Some(m) => Ok(m),
             None => bail!("memfs: cat: {}: No such memory", filename),
@@ -231,11 +222,7 @@ impl Engine {
             .next()
             .unwrap_or("");
 
-        let filters: Vec<Filter> = match self.current_path()? {
-            Some(p) => p.filters.clone(),
-            None => vec![],
-        };
-
+        let filters = self.current_filters()?;
         match queries::get_memory(&self.conn, filename, &filters).await? {
             Some(m) => {
                 queries::delete_memory(&self.conn, m.id).await?;
@@ -315,11 +302,7 @@ impl Engine {
     /// Create a new memory with content, auto-tagged from current CWD.
     /// Also ensures all facets/values in the current path exist.
     pub async fn write(&self, filename: &str, content: &str) -> Result<()> {
-        let tags: Vec<Filter> = match self.current_path()? {
-            Some(p) => p.filters.clone(),
-            None => vec![],
-        };
-        // Ensure facets and values exist
+        let tags = self.current_filters()?;
         for tag in &tags {
             queries::create_facet(&self.conn, &tag.facet).await?;
             queries::ensure_value(&self.conn, &tag.facet, &tag.value).await?;
@@ -330,10 +313,7 @@ impl Engine {
 
     /// Append content to an existing memory.
     pub async fn append(&self, filename: &str, content: &str) -> Result<()> {
-        let filters: Vec<Filter> = match self.current_path()? {
-            Some(p) => p.filters.clone(),
-            None => vec![],
-        };
+        let filters = self.current_filters()?;
         queries::append_memory(&self.conn, filename, content, &filters).await
     }
 
@@ -346,18 +326,15 @@ impl Engine {
         scope: Option<&str>,
         ignore_case: bool,
     ) -> Result<Vec<queries::GrepResult>> {
-        let filters: Vec<Filter> = if let Some(scope_path) = scope {
+        let filters = if let Some(scope_path) = scope {
             let resolved = self.resolve_path(scope_path)?;
             let parsed = path::parse(&resolved, &self.mount_point)?;
             parsed.filters
         } else {
-            match self.current_path()? {
-                Some(p) => p.filters.clone(),
-                None => vec![],
-            }
+            self.current_filters()?
         };
 
-        let memories = queries::list_memories(&self.conn, &filters).await?;
+        let memories = queries::list_memory_contents(&self.conn, &filters).await?;
 
         let re = if ignore_case {
             regex::RegexBuilder::new(pattern)
@@ -418,12 +395,11 @@ impl Engine {
 
         // Find by name pattern
         let pattern = name_pattern.unwrap_or("*");
-        let memories = queries::find_memories(&self.conn, pattern, &filters).await?;
+        let memories = queries::find_memory_metadata(&self.conn, pattern, &filters).await?;
 
         let now = chrono::Utc::now();
 
         for mem in memories {
-            // Apply mtime filter if specified
             if let Some(days) = mtime_days {
                 if let Ok(updated) = chrono::DateTime::parse_from_rfc3339(&mem.updated_at) {
                     let age = now.signed_duration_since(updated);

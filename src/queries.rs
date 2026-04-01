@@ -65,20 +65,9 @@ pub async fn delete_facet(conn: &Connection, name: &str) -> Result<()> {
 
 /// Check if a specific facet:value combination exists (either via tags or placeholders).
 pub async fn value_exists(conn: &Connection, facet: &str, value: &str) -> Result<bool> {
-    // Check real tags first
     let mut rows = conn
         .query(
             "SELECT 1 FROM tags WHERE facet = ?1 AND value = ?2 LIMIT 1",
-            [facet, value],
-        )
-        .await?;
-    if rows.next().await?.is_some() {
-        return Ok(true);
-    }
-    // Check placeholder values (memory_id = 0)
-    let mut rows = conn
-        .query(
-            "SELECT 1 FROM tags WHERE memory_id = 0 AND facet = ?1 AND value = ?2 LIMIT 1",
             [facet, value],
         )
         .await?;
@@ -178,9 +167,11 @@ pub async fn list_memories(conn: &Connection, filters: &[Filter]) -> Result<Vec<
         mems
     };
 
+    let ids: Vec<i64> = memories.iter().map(|m| m.id).collect();
+    let mut tags_map = get_tags_batch(conn, &ids).await?;
     let mut result = Vec::new();
     for mut mem in memories {
-        mem.tags = get_tags(conn, mem.id).await?;
+        mem.tags = tags_map.remove(&mem.id).unwrap_or_default();
         result.push(mem);
     }
     Ok(result)
@@ -425,12 +416,111 @@ pub async fn find_memories(
         mems
     };
 
+    let ids: Vec<i64> = memories.iter().map(|m| m.id).collect();
+    let mut tags_map = get_tags_batch(conn, &ids).await?;
     let mut result = Vec::new();
     for mut mem in memories {
-        mem.tags = get_tags(conn, mem.id).await?;
+        mem.tags = tags_map.remove(&mem.id).unwrap_or_default();
         result.push(mem);
     }
     Ok(result)
+}
+
+// --- Lightweight queries (skip unnecessary data) ---
+
+/// Lightweight result for grep — content only, no tags.
+pub struct MemoryContent {
+    pub filename: String,
+    pub content: String,
+}
+
+/// List memory filename + content without loading tags. Used by grep.
+pub async fn list_memory_contents(conn: &Connection, filters: &[Filter]) -> Result<Vec<MemoryContent>> {
+    if filters.is_empty() {
+        let mut rows = conn
+            .query("SELECT filename, content FROM memories ORDER BY filename", ())
+            .await?;
+        let mut mems = Vec::new();
+        while let Some(row) = rows.next().await? {
+            mems.push(MemoryContent {
+                filename: row.get_value(0)?.as_text().cloned().unwrap_or_default(),
+                content: row.get_value(1)?.as_text().cloned().unwrap_or_default(),
+            });
+        }
+        return Ok(mems);
+    }
+
+    let memory_ids = get_matching_memory_ids(conn, filters).await?;
+    if memory_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let (id_placeholders, id_params) = build_id_in_clause(&memory_ids, 0);
+    let sql = format!(
+        "SELECT filename, content FROM memories WHERE id IN ({}) ORDER BY filename",
+        id_placeholders
+    );
+    let mut rows = conn.query(&sql, id_params).await?;
+    let mut mems = Vec::new();
+    while let Some(row) = rows.next().await? {
+        mems.push(MemoryContent {
+            filename: row.get_value(0)?.as_text().cloned().unwrap_or_default(),
+            content: row.get_value(1)?.as_text().cloned().unwrap_or_default(),
+        });
+    }
+    Ok(mems)
+}
+
+/// Lightweight result for find — metadata only, no content or tags.
+pub struct MemoryMeta {
+    pub filename: String,
+    pub updated_at: String,
+}
+
+/// Find memories by filename pattern, returning only metadata. Used by find.
+pub async fn find_memory_metadata(
+    conn: &Connection,
+    name_pattern: &str,
+    filters: &[Filter],
+) -> Result<Vec<MemoryMeta>> {
+    let like_pattern = glob_to_like(name_pattern);
+
+    if filters.is_empty() {
+        let mut rows = conn
+            .query(
+                "SELECT filename, updated_at FROM memories WHERE filename LIKE ?1 ORDER BY filename",
+                [like_pattern.as_str()],
+            )
+            .await?;
+        let mut mems = Vec::new();
+        while let Some(row) = rows.next().await? {
+            mems.push(MemoryMeta {
+                filename: row.get_value(0)?.as_text().cloned().unwrap_or_default(),
+                updated_at: row.get_value(1)?.as_text().cloned().unwrap_or_default(),
+            });
+        }
+        return Ok(mems);
+    }
+
+    let memory_ids = get_matching_memory_ids(conn, filters).await?;
+    if memory_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let (id_placeholders, mut id_params) = build_id_in_clause(&memory_ids, 0);
+    let like_idx = memory_ids.len() + 1;
+    let sql = format!(
+        "SELECT filename, updated_at FROM memories WHERE filename LIKE ?{} AND id IN ({}) ORDER BY filename",
+        like_idx, id_placeholders
+    );
+    id_params.push(turso::Value::from(like_pattern.as_str()));
+    let mut rows = conn.query(&sql, id_params).await?;
+    let mut mems = Vec::new();
+    while let Some(row) = rows.next().await? {
+        mems.push(MemoryMeta {
+            filename: row.get_value(0)?.as_text().cloned().unwrap_or_default(),
+            updated_at: row.get_value(1)?.as_text().cloned().unwrap_or_default(),
+        });
+    }
+    Ok(mems)
 }
 
 // --- Helpers ---
@@ -450,6 +540,31 @@ async fn get_tags(conn: &Connection, memory_id: i64) -> Result<Vec<Filter>> {
         tags.push(Filter { facet, value });
     }
     Ok(tags)
+}
+
+/// Batch-fetch tags for multiple memories in a single query.
+async fn get_tags_batch(conn: &Connection, memory_ids: &[i64]) -> Result<std::collections::HashMap<i64, Vec<Filter>>> {
+    use std::collections::HashMap;
+
+    if memory_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let (id_placeholders, id_params) = build_id_in_clause(memory_ids, 0);
+    let sql = format!(
+        "SELECT memory_id, facet, value FROM tags WHERE memory_id IN ({}) ORDER BY memory_id, facet, value",
+        id_placeholders
+    );
+
+    let mut rows = conn.query(&sql, id_params).await?;
+    let mut map: HashMap<i64, Vec<Filter>> = HashMap::new();
+    while let Some(row) = rows.next().await? {
+        let mid = row.get_value(0)?.as_integer().copied().unwrap_or(0);
+        let facet: String = row.get_value(1)?.as_text().cloned().unwrap_or_default();
+        let value: String = row.get_value(2)?.as_text().cloned().unwrap_or_default();
+        map.entry(mid).or_default().push(Filter { facet, value });
+    }
+    Ok(map)
 }
 
 /// Get memory IDs that match ALL given filters.
