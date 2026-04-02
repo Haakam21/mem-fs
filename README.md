@@ -24,18 +24,26 @@ At each level, `ls` shows:
 
 ## Quick Start
 
+### One-line setup
+
+```bash
+git clone https://github.com/Haakam21/mem-fs.git && bash mem-fs/setup.sh ~/memories
+```
+
+This builds memfs, installs it to `~/.local/bin`, mounts at `~/memories`, and creates a `CLAUDE.md` in `~/` so Claude Code knows where your memories are.
+
 ### Prerequisites
 
 - Rust toolchain (`rustup`)
-- macFUSE (macOS): `brew install macfuse`
+- macFUSE (macOS): `brew install macfuse` — approve the kernel extension in System Settings > Privacy & Security
 - libfuse (Linux): `apt install libfuse-dev`
+- pkg-config: `brew install pkgconf` (macOS) or `apt install pkg-config` (Linux)
 
-### Build
+### Manual setup
 
 ```bash
-make build
-# or
 cargo build --release
+./target/release/memfs mount -f ~/memories &
 ```
 
 ### Usage
@@ -43,7 +51,7 @@ cargo build --release
 **Mount as a real filesystem (recommended):**
 
 ```bash
-memfs mount /memories
+memfs mount ~/memories
 ```
 
 Then use standard commands:
