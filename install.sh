@@ -4,7 +4,7 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Haakam21/mem-fs/main/install.sh | bash
 #
-# Installs into the current directory: ./bin/memfs, ./memories/, ./CLAUDE.md
+# Installs binary to ~/.local/bin, mounts ./memories/, creates ./CLAUDE.md
 #
 # Prerequisites:
 #   - macFUSE (macOS): https://macfuse.io
@@ -15,7 +15,7 @@ set -euo pipefail
 
 INSTALL_BASE="${1:-$(pwd)}"
 MOUNT_PATH="$INSTALL_BASE/memories"
-BIN_DIR="$INSTALL_BASE/bin"
+BIN_DIR="$HOME/.local/bin"
 REPO="Haakam21/mem-fs"
 
 # --- Detect platform ---
