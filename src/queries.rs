@@ -466,6 +466,48 @@ pub async fn rename_memory(conn: &Connection, id: i64, new_filename: &str) -> Re
     Ok(())
 }
 
+/// Lightweight result for readdir — id + filename only, no content or tags.
+pub struct MemoryStub {
+    pub id: i64,
+    pub filename: String,
+}
+
+/// List memory id + filename without loading content or tags. Used by FUSE readdir.
+pub async fn list_memory_stubs(conn: &Connection, filters: &[Filter]) -> Result<Vec<MemoryStub>> {
+    if filters.is_empty() {
+        let mut rows = conn
+            .query("SELECT id, filename FROM memories ORDER BY filename", ())
+            .await?;
+        let mut mems = Vec::new();
+        while let Some(row) = rows.next().await? {
+            mems.push(MemoryStub {
+                id: row.get_value(0)?.as_integer().copied().unwrap_or(0),
+                filename: row.get_value(1)?.as_text().cloned().unwrap_or_default(),
+            });
+        }
+        return Ok(mems);
+    }
+
+    let memory_ids = get_matching_memory_ids(conn, filters).await?;
+    if memory_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let (id_placeholders, id_params) = build_id_in_clause(&memory_ids, 0);
+    let sql = format!(
+        "SELECT id, filename FROM memories WHERE id IN ({}) ORDER BY filename",
+        id_placeholders
+    );
+    let mut rows = conn.query(&sql, id_params).await?;
+    let mut mems = Vec::new();
+    while let Some(row) = rows.next().await? {
+        mems.push(MemoryStub {
+            id: row.get_value(0)?.as_integer().copied().unwrap_or(0),
+            filename: row.get_value(1)?.as_text().cloned().unwrap_or_default(),
+        });
+    }
+    Ok(mems)
+}
+
 // --- Lightweight queries (skip unnecessary data) ---
 
 /// Lightweight result for grep — content only, no tags.

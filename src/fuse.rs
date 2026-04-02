@@ -29,6 +29,7 @@ pub struct MemfsFs {
 
     next_fh: AtomicU64,
     write_buffers: RwLock<HashMap<u64, Vec<u8>>>,
+    read_cache: RwLock<HashMap<u64, Vec<u8>>>,
 
     uid: u32,
     gid: u32,
@@ -138,7 +139,7 @@ impl Filesystem for MemfsFs {
         let name_str = match name.to_str() {
             Some(n) => n,
             None => {
-                reply.error(libc::ENOENT);
+                reply.error(libc::EINVAL);
                 return;
             }
         };
@@ -258,7 +259,7 @@ impl Filesystem for MemfsFs {
                 for f in queries::remaining_facets(conn, &parsed.filters).await? {
                     items.push((f, true, None));
                 }
-                for m in queries::list_memories(conn, &parsed.filters).await? {
+                for m in queries::list_memory_stubs(conn, &parsed.filters).await? {
                     items.push((m.filename, false, Some(m.id)));
                 }
             }
@@ -334,7 +335,7 @@ impl Filesystem for MemfsFs {
         &mut self,
         _req: &Request,
         ino: u64,
-        _fh: u64,
+        fh: u64,
         offset: i64,
         size: u32,
         _flags: i32,
@@ -346,21 +347,33 @@ impl Filesystem for MemfsFs {
             return;
         }
 
-        let id = Self::memory_id(ino);
-        let conn = &self.conn;
-        let rt = &self.runtime;
-        match rt.block_on(async { queries::get_memory_by_id(conn, id).await }) {
-            Ok(Some(mem)) => {
-                let data = mem.content.as_bytes();
-                let start = offset as usize;
-                if start >= data.len() {
-                    reply.data(&[]);
-                } else {
-                    let end = (start + size as usize).min(data.len());
-                    reply.data(&data[start..end]);
+        // Populate cache on first read for this file handle
+        if !self.read_cache.read().unwrap().contains_key(&fh) {
+            let id = Self::memory_id(ino);
+            let conn = &self.conn;
+            let rt = &self.runtime;
+            match rt.block_on(async { queries::get_memory_by_id(conn, id).await }) {
+                Ok(Some(mem)) => {
+                    self.read_cache
+                        .write()
+                        .unwrap()
+                        .insert(fh, mem.content.into_bytes());
+                }
+                _ => {
+                    reply.error(libc::ENOENT);
+                    return;
                 }
             }
-            _ => reply.error(libc::ENOENT),
+        }
+
+        let cache = self.read_cache.read().unwrap();
+        let data = &cache[&fh];
+        let start = offset as usize;
+        if start >= data.len() {
+            reply.data(&[]);
+        } else {
+            let end = (start + size as usize).min(data.len());
+            reply.data(&data[start..end]);
         }
     }
 
@@ -451,15 +464,20 @@ impl Filesystem for MemfsFs {
         reply: ReplyEmpty,
     ) {
         let buffer = self.write_buffers.write().unwrap().remove(&fh);
+        self.read_cache.write().unwrap().remove(&fh);
         if let Some(data) = buffer {
             if ino >= FILE_INODE_BASE {
                 let id = Self::memory_id(ino);
                 let content = String::from_utf8_lossy(&data);
                 let conn = &self.conn;
                 let rt = &self.runtime;
-                let _ = rt.block_on(async {
+                match rt.block_on(async {
                     queries::update_memory_content(conn, id, &content).await
-                });
+                }) {
+                    Ok(()) => reply.ok(),
+                    Err(_) => reply.error(libc::EIO),
+                }
+                return;
             }
         }
         reply.ok();
@@ -489,9 +507,13 @@ impl Filesystem for MemfsFs {
                 let id = Self::memory_id(ino);
                 let conn = &self.conn;
                 let rt = &self.runtime;
-                let _ = rt.block_on(async {
-                    queries::update_memory_content(conn, id, "").await
-                });
+                if rt
+                    .block_on(async { queries::update_memory_content(conn, id, "").await })
+                    .is_err()
+                {
+                    reply.error(libc::EIO);
+                    return;
+                }
             }
         }
 
@@ -757,6 +779,7 @@ pub fn mount(
         path_to_ino: RwLock::new(path_to_ino),
         next_fh: AtomicU64::new(1),
         write_buffers: RwLock::new(HashMap::new()),
+        read_cache: RwLock::new(HashMap::new()),
         uid,
         gid,
     };
@@ -769,19 +792,11 @@ pub fn mount(
         MountOption::RW,
     ];
 
-    if !foreground {
-        // AutoUnmount handles cleanup when process exits
-        // For true background, user can run with & or via init system
-        eprintln!(
-            "memfs: mounting at {} (use memfs unmount {} to stop)",
-            fuse_mountpoint, fuse_mountpoint
-        );
-    } else {
-        eprintln!(
-            "memfs: mounting at {} (press Ctrl+C to unmount)",
-            fuse_mountpoint
-        );
-    }
+    let _ = foreground; // TODO: implement true daemonization
+    eprintln!(
+        "memfs: mounting at {} (Ctrl+C or `memfs unmount {}` to stop)",
+        fuse_mountpoint, fuse_mountpoint
+    );
 
     fuser::mount2(fs, fuse_mountpoint, &options)?;
     Ok(())
