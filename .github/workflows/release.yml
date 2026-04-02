@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact: memfs-darwin-arm64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact: memfs-darwin-x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: memfs-linux-x86_64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install macFUSE
+        if: runner.os == 'macOS'
+        run: brew install --cask macfuse
+
+      - name: Install libfuse
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libfuse-dev pkg-config
+
+      - name: Build
+        run: PKG_CONFIG_PATH="/usr/local/lib/pkgconfig" cargo build --release --target ${{ matrix.target }}
+
+      - name: Test
+        run: PKG_CONFIG_PATH="/usr/local/lib/pkgconfig" cargo test --target ${{ matrix.target }}
+
+      - name: Package
+        run: cp target/${{ matrix.target }}/release/memfs ${{ matrix.artifact }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            memfs-darwin-arm64/memfs-darwin-arm64
+            memfs-darwin-x86_64/memfs-darwin-x86_64
+            memfs-linux-x86_64/memfs-linux-x86_64

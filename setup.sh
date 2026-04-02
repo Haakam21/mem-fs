@@ -1,15 +1,19 @@
 #!/bin/bash
-# MemFS setup — builds, installs, mounts, and configures Claude Code integration.
+# MemFS setup — downloads (or builds), installs, mounts, and configures Claude Code.
 #
 # Usage:
 #   bash setup.sh                    # defaults: mount at ./memories
 #   bash setup.sh /path/to/memories  # custom mount point
 #
 # What it does:
-#   1. Builds memfs (requires Rust toolchain + macFUSE/libfuse)
+#   1. Downloads a prebuilt binary (or builds from source if unavailable)
 #   2. Installs the binary to ~/.local/bin/memfs
 #   3. Mounts the FUSE filesystem at the specified path
 #   4. Creates a CLAUDE.md in the parent directory so Claude Code knows about it
+#
+# Prerequisites:
+#   - macFUSE (macOS): https://macfuse.io
+#   - libfuse (Linux): apt install libfuse3-dev
 
 set -euo pipefail
 
@@ -18,55 +22,50 @@ MOUNT_PATH="${1:-$SCRIPT_DIR/memories}"
 MOUNT_PARENT="$(dirname "$MOUNT_PATH")"
 MOUNT_NAME="$(basename "$MOUNT_PATH")"
 INSTALL_DIR="$HOME/.local/bin"
+REPO="Haakam21/mem-fs"
 
-# --- Check prerequisites ---
+# --- Detect platform ---
 
-if ! command -v cargo &>/dev/null; then
-    echo "Error: Rust toolchain not found. Install from https://rustup.rs"
-    exit 1
-fi
+OS="$(uname -s)"
+ARCH="$(uname -m)"
 
-if ! command -v pkg-config &>/dev/null; then
-    echo "Error: pkg-config not found."
-    if [[ "$(uname)" == "Darwin" ]]; then
-        echo "  Install with: brew install pkgconf"
-    else
-        echo "  Install with: apt install pkg-config"
-    fi
-    exit 1
-fi
-
-# Check for FUSE library
-if [[ "$(uname)" == "Darwin" ]]; then
-    if ! pkg-config --exists fuse 2>/dev/null && ! pkg-config --exists osxfuse 2>/dev/null; then
-        if [[ -f /usr/local/lib/pkgconfig/fuse.pc ]]; then
-            export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-        else
-            echo "Error: macFUSE not found. Install from https://macfuse.io"
-            echo "  After install, approve the kernel extension in System Settings > Privacy & Security"
-            exit 1
-        fi
-    fi
-else
-    if ! pkg-config --exists fuse 2>/dev/null; then
-        echo "Error: libfuse not found."
-        echo "  Install with: apt install libfuse-dev (Debian/Ubuntu)"
-        echo "  Install with: dnf install fuse-devel (Fedora)"
-        exit 1
-    fi
-fi
-
-# --- Build ---
-
-echo "Building memfs..."
-cd "$SCRIPT_DIR"
-cargo build --release --quiet
+case "$OS-$ARCH" in
+    Darwin-arm64)  ARTIFACT="memfs-darwin-arm64" ;;
+    Darwin-x86_64) ARTIFACT="memfs-darwin-x86_64" ;;
+    Linux-x86_64)  ARTIFACT="memfs-linux-x86_64" ;;
+    *) ARTIFACT="" ;;
+esac
 
 # --- Install binary ---
 
 mkdir -p "$INSTALL_DIR"
-cp target/release/memfs "$INSTALL_DIR/memfs"
-echo "Installed memfs to $INSTALL_DIR/memfs"
+
+if [[ -n "$ARTIFACT" ]] && command -v gh &>/dev/null; then
+    # Try downloading prebuilt binary from latest release
+    echo "Downloading prebuilt binary ($ARTIFACT)..."
+    if gh release download --repo "$REPO" --pattern "$ARTIFACT" --dir "$INSTALL_DIR" --clobber 2>/dev/null; then
+        mv "$INSTALL_DIR/$ARTIFACT" "$INSTALL_DIR/memfs"
+        chmod +x "$INSTALL_DIR/memfs"
+        echo "Installed prebuilt memfs to $INSTALL_DIR/memfs"
+    else
+        echo "No prebuilt binary available, building from source..."
+        ARTIFACT=""
+    fi
+fi
+
+if [[ -z "$ARTIFACT" ]] || [[ ! -x "$INSTALL_DIR/memfs" ]]; then
+    # Fall back to building from source
+    if ! command -v cargo &>/dev/null; then
+        echo "Error: No prebuilt binary and Rust toolchain not found."
+        echo "  Install Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+        exit 1
+    fi
+    echo "Building memfs from source..."
+    cd "$SCRIPT_DIR"
+    PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}" cargo build --release --quiet
+    cp target/release/memfs "$INSTALL_DIR/memfs"
+    echo "Installed memfs to $INSTALL_DIR/memfs"
+fi
 
 # Add to PATH if not already there
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
@@ -74,12 +73,28 @@ if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     echo "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc"
 fi
 
+# --- Check FUSE runtime ---
+
+if [[ "$OS" == "Darwin" ]]; then
+    if [[ ! -d /Library/Frameworks/macFUSE.framework ]]; then
+        echo "Error: macFUSE not installed. Download from https://macfuse.io"
+        echo "  After install, approve the kernel extension in System Settings > Privacy & Security"
+        exit 1
+    fi
+else
+    if ! command -v fusermount &>/dev/null && ! command -v fusermount3 &>/dev/null; then
+        echo "Error: FUSE not installed."
+        echo "  Install with: apt install fuse3 (Debian/Ubuntu)"
+        exit 1
+    fi
+fi
+
 # --- Mount ---
 
 # Unmount if already mounted
 if mount | grep -q "$MOUNT_PATH"; then
     echo "Unmounting existing mount at $MOUNT_PATH..."
-    if [[ "$(uname)" == "Darwin" ]]; then
+    if [[ "$OS" == "Darwin" ]]; then
         umount "$MOUNT_PATH" 2>/dev/null || true
     else
         fusermount -u "$MOUNT_PATH" 2>/dev/null || true
@@ -106,8 +121,6 @@ echo "Mounted successfully (PID $MOUNT_PID)"
 # --- Create CLAUDE.md indicator ---
 
 CLAUDE_MD="$MOUNT_PARENT/CLAUDE.md"
-
-# Only create if it doesn't exist or doesn't mention memories
 MEMORIES_LINE="Your memories are in the ./$MOUNT_NAME directory."
 
 if [[ ! -f "$CLAUDE_MD" ]]; then
@@ -128,4 +141,4 @@ echo "  Database:     $MEMFS_DB"
 echo "  Claude hint:  $CLAUDE_MD"
 echo ""
 echo "To unmount:     memfs unmount $MOUNT_PATH"
-echo "To remount:     memfs mount -f $MOUNT_PATH &"
+echo "To remount:     MEMFS_DB=$MEMFS_DB memfs mount -f $MOUNT_PATH &"
