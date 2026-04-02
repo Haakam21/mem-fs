@@ -27,10 +27,10 @@ At each level, `ls` shows:
 ### One-line setup
 
 ```bash
-git clone https://github.com/Haakam21/mem-fs.git && bash mem-fs/setup.sh ~/memories
+git clone https://github.com/Haakam21/mem-fs.git && bash mem-fs/setup.sh
 ```
 
-This builds memfs, installs it to `~/.local/bin`, mounts at `~/memories`, and creates a `CLAUDE.md` in `~/` so Claude Code knows where your memories are.
+This builds memfs, installs it to `~/.local/bin`, mounts at `./memories` inside the repo, and creates a `CLAUDE.md` next to it so Claude Code knows where your memories are.
 
 ### Prerequisites
 
@@ -43,7 +43,7 @@ This builds memfs, installs it to `~/.local/bin`, mounts at `~/memories`, and cr
 
 ```bash
 cargo build --release
-./target/release/memfs mount -f ~/memories &
+./target/release/memfs mount -f ./memories &
 ```
 
 ### Usage
@@ -51,7 +51,7 @@ cargo build --release
 **Mount as a real filesystem (recommended):**
 
 ```bash
-memfs mount ~/memories
+memfs mount ./memories
 ```
 
 Then use standard commands:

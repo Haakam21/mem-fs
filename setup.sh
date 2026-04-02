@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-MOUNT_PATH="${1:-$HOME/memories}"
+MOUNT_PATH="${1:-$SCRIPT_DIR/memories}"
 MOUNT_PARENT="$(dirname "$MOUNT_PATH")"
 MOUNT_NAME="$(basename "$MOUNT_PATH")"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -107,47 +107,17 @@ echo "Mounted successfully (PID $MOUNT_PID)"
 CLAUDE_MD="$MOUNT_PARENT/CLAUDE.md"
 
 # Only create if it doesn't exist or doesn't mention memories
-if [[ ! -f "$CLAUDE_MD" ]] || ! grep -q "$MOUNT_NAME" "$CLAUDE_MD" 2>/dev/null; then
-    if [[ -f "$CLAUDE_MD" ]]; then
-        # Append to existing CLAUDE.md
-        echo "" >> "$CLAUDE_MD"
-        cat >> "$CLAUDE_MD" <<EOF
+MEMORIES_LINE="Your memories are in the ./$MOUNT_NAME directory."
 
-## Memories
-
-Your personal memories are stored in the \`$MOUNT_NAME/\` directory. It is a faceted filesystem — navigate it with standard tools (\`ls\`, \`cat\`, \`grep\`, \`find\`). Paths are facet:value filter pairs that can be composed in any order:
-
-\`\`\`
-ls $MOUNT_NAME/                          # list facet categories
-ls $MOUNT_NAME/people/sister/            # memories tagged people:sister
-ls $MOUNT_NAME/people/sister/dates/      # narrow by date
-cat $MOUNT_NAME/people/sister/note.md    # read a memory
-echo "content" > $MOUNT_NAME/people/sister/new.md  # create a memory
-mkdir $MOUNT_NAME/projects               # create a new facet
-\`\`\`
-
-Path order doesn't matter: \`$MOUNT_NAME/people/sister/dates/2025-03\` and \`$MOUNT_NAME/dates/2025-03/people/sister\` show the same memories.
-EOF
-        echo "Appended memories section to $CLAUDE_MD"
-    else
-        cat > "$CLAUDE_MD" <<EOF
-## Memories
-
-Your personal memories are stored in the \`$MOUNT_NAME/\` directory. It is a faceted filesystem — navigate it with standard tools (\`ls\`, \`cat\`, \`grep\`, \`find\`). Paths are facet:value filter pairs that can be composed in any order:
-
-\`\`\`
-ls $MOUNT_NAME/                          # list facet categories
-ls $MOUNT_NAME/people/sister/            # memories tagged people:sister
-ls $MOUNT_NAME/people/sister/dates/      # narrow by date
-cat $MOUNT_NAME/people/sister/note.md    # read a memory
-echo "content" > $MOUNT_NAME/people/sister/new.md  # create a memory
-mkdir $MOUNT_NAME/projects               # create a new facet
-\`\`\`
-
-Path order doesn't matter: \`$MOUNT_NAME/people/sister/dates/2025-03\` and \`$MOUNT_NAME/dates/2025-03/people/sister\` show the same memories.
-EOF
-        echo "Created $CLAUDE_MD"
-    fi
+if [[ ! -f "$CLAUDE_MD" ]]; then
+    echo "$MEMORIES_LINE" > "$CLAUDE_MD"
+    echo "Created $CLAUDE_MD"
+elif ! grep -qF "$MOUNT_NAME" "$CLAUDE_MD" 2>/dev/null; then
+    echo "" >> "$CLAUDE_MD"
+    echo "$MEMORIES_LINE" >> "$CLAUDE_MD"
+    echo "Appended to $CLAUDE_MD"
+else
+    echo "$CLAUDE_MD already mentions $MOUNT_NAME"
 fi
 
 echo ""
