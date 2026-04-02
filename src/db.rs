@@ -50,6 +50,12 @@ pub async fn migrate(conn: &Connection) -> Result<()> {
     .await?;
 
     conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_unique ON tags (memory_id, facet, value)",
+        (),
+    )
+    .await?;
+
+    conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_tags_memory_id ON tags (memory_id)",
         (),
     )

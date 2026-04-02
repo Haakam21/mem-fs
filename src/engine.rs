@@ -220,15 +220,9 @@ impl Engine {
             bail!("memfs: rm: cannot remove root");
         }
 
-        // Non-recursive: target should be a filename
-        // Extract filename from the path (last segment if it looks like a file)
-        let filename = resolved
-            .rsplit('/')
-            .next()
-            .unwrap_or("");
-
-        let filters = self.current_filters()?;
-        match queries::get_memory(&self.conn, filename, &filters).await? {
+        // Non-recursive: target should be a memory filename (the trailing odd segment)
+        let filename = parsed.trailing_facet.as_deref().unwrap_or("");
+        match queries::get_memory(&self.conn, filename, &parsed.filters).await? {
             Some(m) => {
                 queries::delete_memory(&self.conn, m.id).await?;
                 Ok(format!("Deleted '{}'", filename))

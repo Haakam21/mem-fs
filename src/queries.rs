@@ -299,20 +299,10 @@ pub async fn remove_tag(conn: &Connection, memory_id: i64, facet: &str, value: &
     Ok(())
 }
 
-/// Add a tag to a memory.
+/// Add a tag to a memory (idempotent).
 pub async fn add_tag(conn: &Connection, memory_id: i64, facet: &str, value: &str) -> Result<()> {
-    // Check if tag already exists
-    let mut rows = conn
-        .query(
-            "SELECT 1 FROM tags WHERE memory_id = ?1 AND facet = ?2 AND value = ?3",
-            turso::params![memory_id, facet, value],
-        )
-        .await?;
-    if rows.next().await?.is_some() {
-        return Ok(()); // Already tagged
-    }
     conn.execute(
-        "INSERT INTO tags (memory_id, facet, value) VALUES (?1, ?2, ?3)",
+        "INSERT OR IGNORE INTO tags (memory_id, facet, value) VALUES (?1, ?2, ?3)",
         turso::params![memory_id, facet, value],
     )
     .await?;
@@ -358,12 +348,11 @@ pub async fn remaining_facets(conn: &Connection, filters: &[Filter]) -> Result<V
     }
 
     // Step 2: get distinct facets from those memories, excluding already-filtered facets
-    let placeholders: Vec<String> = (1..=memory_ids.len()).map(|i| format!("?{}", i)).collect();
+    let (id_placeholders, turso_params) = build_id_in_clause(&memory_ids, 0);
     let sql = format!(
         "SELECT DISTINCT facet FROM tags WHERE memory_id IN ({}) AND memory_id > 0 ORDER BY facet",
-        placeholders.join(", ")
+        id_placeholders
     );
-    let turso_params: Vec<turso::Value> = memory_ids.iter().map(|id| turso::Value::from(*id)).collect();
 
     let mut rows = conn.query(&sql, turso_params).await?;
     let mut facets = Vec::new();
@@ -374,56 +363,6 @@ pub async fn remaining_facets(conn: &Connection, filters: &[Filter]) -> Result<V
         }
     }
     Ok(facets)
-}
-
-/// Find memories by filename pattern (glob-style, for `find -name`).
-pub async fn find_memories(
-    conn: &Connection,
-    name_pattern: &str,
-    filters: &[Filter],
-) -> Result<Vec<Memory>> {
-    let like_pattern = glob_to_like(name_pattern);
-
-    let memories = if filters.is_empty() {
-        let mut rows = conn
-            .query(
-                "SELECT id, filename, content, created_at, updated_at FROM memories WHERE filename LIKE ?1 ORDER BY filename",
-                [like_pattern.as_str()],
-            )
-            .await?;
-        let mut mems = Vec::new();
-        while let Some(row) = rows.next().await? {
-            mems.push(row_to_memory(&row)?);
-        }
-        mems
-    } else {
-        let memory_ids = get_matching_memory_ids(conn, filters).await?;
-        if memory_ids.is_empty() {
-            return Ok(vec![]);
-        }
-        let (id_placeholders, mut id_params) = build_id_in_clause(&memory_ids, 0);
-        let like_idx = memory_ids.len() + 1;
-        let sql = format!(
-            "SELECT id, filename, content, created_at, updated_at FROM memories WHERE filename LIKE ?{} AND id IN ({}) ORDER BY filename",
-            like_idx, id_placeholders
-        );
-        id_params.push(turso::Value::from(like_pattern.as_str()));
-        let mut rows = conn.query(&sql, id_params).await?;
-        let mut mems = Vec::new();
-        while let Some(row) = rows.next().await? {
-            mems.push(row_to_memory(&row)?);
-        }
-        mems
-    };
-
-    let ids: Vec<i64> = memories.iter().map(|m| m.id).collect();
-    let mut tags_map = get_tags_batch(conn, &ids).await?;
-    let mut result = Vec::new();
-    for mut mem in memories {
-        mem.tags = tags_map.remove(&mem.id).unwrap_or_default();
-        result.push(mem);
-    }
-    Ok(result)
 }
 
 /// Get a single memory by its database ID (used by FUSE read path).
