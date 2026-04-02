@@ -29,9 +29,11 @@ src/
 ├── queries.rs    # All SQL queries — two-step ID resolution pattern
 ├── engine.rs     # Core orchestration: ties path + state + queries
 ├── format.rs     # Output formatting (ls columns, cat tags, grep lines)
+├── fuse.rs       # FUSE filesystem: implements fuser::Filesystem trait
+├── util.rs       # Shared utilities (expand_tilde)
 ```
 
-**Design principle:** `main.rs` is thin (parse flags, call engine, print formatted output). All business logic lives in `engine.rs` which composes `path`, `state`, and `queries`.
+**Design principle:** `main.rs` is thin (parse flags, call engine, print formatted output). All business logic lives in `engine.rs` which composes `path`, `state`, and `queries`. The FUSE layer (`fuse.rs`) is a separate adapter that calls `queries` directly (not through Engine) to avoid CWD state file dependency.
 
 ## Key Invariant
 
@@ -73,13 +75,54 @@ Never use subqueries with compound SELECT in Turso — they fail at runtime.
 
 ## Commands
 
-`memfs {cd, ls, pwd, cat, mkdir, rm, mv, cp, write, append, grep, find}`
+`memfs {cd, ls, pwd, cat, mkdir, rm, mv, cp, write, append, grep, find, mount, unmount}`
 
 - `write`/`append` accept content as arg or via stdin
 - `mkdir -p` creates facet categories AND ensures values exist (placeholder tags)
 - `mv` retags a memory (changes facet:value), `cp` adds an additional tag
 - `rm` deletes a memory, `rm -r` untags all memories from a facet:value
+- `mount <path>` mounts as FUSE filesystem, `unmount <path>` unmounts
 
-## Pending: FUSE Mount
+## FUSE Mount
 
-Plan is in `FUSE_PLAN.md`. Mount MemFS as a real FUSE filesystem so `ls /memories` works natively without the `memfs` binary prefix. Uses `fuser` crate + macFUSE (macOS) / libfuse (Linux). Not yet implemented.
+Mount MemFS as a real FUSE filesystem so `ls /memories`, `cat`, `echo >`, `mkdir`, `rm` all work natively with standard Unix tools — no `memfs` binary prefix needed.
+
+### Prerequisites
+
+- **macOS:** macFUSE (`brew install macfuse` or macfuse.io) + kernel extension approval in System Settings > Privacy & Security
+- **Linux:** `apt install libfuse-dev` or `dnf install fuse-devel`
+- **Build:** `PKG_CONFIG_PATH="/usr/local/lib/pkgconfig" cargo build --release` (pkg-config must find fuse)
+
+### Usage
+
+```bash
+memfs mount -f /tmp/memories          # foreground (Ctrl+C to unmount)
+memfs mount /tmp/memories &           # background
+memfs unmount /tmp/memories           # unmount
+```
+
+### FUSE Architecture (`src/fuse.rs`)
+
+The FUSE layer is a thin adapter — it does NOT use Engine's CWD-dependent methods. Instead it calls `queries` directly with explicit filter context derived from each inode's virtual path.
+
+**Inode strategy:**
+- Root = inode 1. Directories (facets/values) dynamically allocated from 2 upward.
+- Files: `inode = memory_id + 1_000_000` (deterministic). Same memory = same inode across all filter paths.
+- Bidirectional `HashMap<u64, String>` for directory inode ↔ path mapping.
+
+**Async bridge:** Stores a `tokio::runtime::Runtime`. FUSE trait methods are sync; each calls `rt.block_on(async { queries::... })`.
+
+**Key design decisions:**
+- Directories always win over files in `lookup()` (facet name shadows memory filename)
+- `read()` returns raw content only (no `--- tags: ... ---` header)
+- `main.rs` handles `Mount`/`Unmount` before creating the tokio runtime to avoid nested-runtime panic
+- Write buffering: `create()` inserts empty memory in DB immediately (for stable inode), `write()` buffers, `release()` flushes to DB
+- Truncation handled via `setattr(size=0)`, not `open(O_TRUNC)` — macFUSE strips O_TRUNC from open flags
+
+### Testing with a sub-agent
+
+```bash
+bash tests/test_fuse_agent.sh
+```
+
+Seeds 14 memories across 5 facets, mounts via FUSE, spawns an uninstructed Claude Code agent with queries requiring 3+ filter depth navigation. Verifies agents can use `ls`, `cat`, `grep` with zero documentation.
