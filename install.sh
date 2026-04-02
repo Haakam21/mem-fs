@@ -2,7 +2,7 @@
 # MemFS install — downloads the binary, mounts, and configures Claude Code.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/Haakam21/mem-fs/main/install.sh | bash
+#   gh api repos/Haakam21/mem-fs/contents/install.sh --jq '.content' | base64 -d | bash
 #
 # Installs into the current directory: ./bin/memfs, ./memories/, ./CLAUDE.md
 #
