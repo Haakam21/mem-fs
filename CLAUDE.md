@@ -70,7 +70,7 @@ Never use subqueries with compound SELECT in Turso — they fail at runtime.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MEMFS_MOUNT` | `/memories` | Virtual mount point |
-| `MEMFS_DB` | `~/.memfs.db` | Turso database file |
+| `MEMFS_DB` | `./.memfs.db` | Turso database file |
 | `MEMFS_STATE` | `~/.memfs_cwd` | Virtual CWD state file |
 
 ## Commands

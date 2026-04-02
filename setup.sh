@@ -88,6 +88,7 @@ if mount | grep -q "$MOUNT_PATH"; then
 fi
 
 mkdir -p "$MOUNT_PATH"
+export MEMFS_DB="$MOUNT_PARENT/.memfs.db"
 echo "Mounting memfs at $MOUNT_PATH..."
 "$INSTALL_DIR/memfs" mount -f "$MOUNT_PATH" &
 MOUNT_PID=$!
@@ -123,7 +124,7 @@ fi
 echo ""
 echo "=== MemFS is ready ==="
 echo "  Mount point:  $MOUNT_PATH"
-echo "  Database:     ~/.memfs.db"
+echo "  Database:     $MEMFS_DB"
 echo "  Claude hint:  $CLAUDE_MD"
 echo ""
 echo "To unmount:     memfs unmount $MOUNT_PATH"
