@@ -407,17 +407,28 @@ impl Filesystem for MemfsFs {
         let mp = &self.mount_point;
         let result = rt.block_on(async {
             let parsed = path::parse(&parent_path, mp)?;
-            // Ensure facets/values exist
             for f in &parsed.filters {
                 queries::create_facet(conn, &f.facet).await?;
                 queries::ensure_value(conn, &f.facet, &f.value).await?;
             }
+
+            // If a memory with this filename already exists, add the new
+            // path's tags to it instead of creating a duplicate. This makes
+            // `cp /memories/A/1/note.md /memories/B/2/note.md` add tags
+            // rather than create a separate copy.
+            if let Some(existing) = queries::get_memory(conn, filename, &[]).await? {
+                for f in &parsed.filters {
+                    queries::add_tag(conn, existing.id, &f.facet, &f.value).await?;
+                }
+                return Ok(existing.id);
+            }
+
             queries::create_memory(conn, filename, "", &parsed.filters).await
         });
 
         match result {
-            Ok(new_id) => {
-                let ino = Self::file_ino(new_id);
+            Ok(id) => {
+                let ino = Self::file_ino(id);
                 let fh = self.next_fh.fetch_add(1, Ordering::Relaxed);
                 self.write_buffers.write().unwrap().insert(fh, Vec::new());
                 let now = SystemTime::now();
