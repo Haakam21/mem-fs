@@ -426,6 +426,46 @@ pub async fn find_memories(
     Ok(result)
 }
 
+/// Get a single memory by its database ID (used by FUSE read path).
+pub async fn get_memory_by_id(conn: &Connection, id: i64) -> Result<Option<Memory>> {
+    let mut rows = conn
+        .query(
+            "SELECT id, filename, content, created_at, updated_at FROM memories WHERE id = ?1",
+            turso::params![id],
+        )
+        .await?;
+    match rows.next().await? {
+        Some(row) => {
+            let mut m = row_to_memory(&row)?;
+            m.tags = get_tags(conn, m.id).await?;
+            Ok(Some(m))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Update a memory's content by ID (used by FUSE write flush).
+pub async fn update_memory_content(conn: &Connection, id: i64, content: &str) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE memories SET content = ?1, updated_at = ?2 WHERE id = ?3",
+        turso::params![content, now.as_str(), id],
+    )
+    .await?;
+    Ok(())
+}
+
+/// Rename a memory's filename by ID (used by FUSE rename).
+pub async fn rename_memory(conn: &Connection, id: i64, new_filename: &str) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE memories SET filename = ?1, updated_at = ?2 WHERE id = ?3",
+        turso::params![new_filename, now.as_str(), id],
+    )
+    .await?;
+    Ok(())
+}
+
 // --- Lightweight queries (skip unnecessary data) ---
 
 /// Lightweight result for grep — content only, no tags.

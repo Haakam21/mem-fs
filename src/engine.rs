@@ -17,6 +17,7 @@ pub struct Engine {
 pub struct LsEntry {
     pub name: String,
     pub is_dir: bool,
+    pub id: Option<i64>,
     pub updated_at: Option<String>,
     pub content_len: usize,
 }
@@ -99,6 +100,7 @@ impl Engine {
                 entries.push(LsEntry {
                     name: f,
                     is_dir: true,
+                    id: None,
                     updated_at: None,
                     content_len: 0,
                 });
@@ -111,6 +113,7 @@ impl Engine {
                 entries.push(LsEntry {
                     name: v,
                     is_dir: true,
+                    id: None,
                     updated_at: None,
                     content_len: 0,
                 });
@@ -122,6 +125,7 @@ impl Engine {
                 entries.push(LsEntry {
                     name: f,
                     is_dir: true,
+                    id: None,
                     updated_at: None,
                     content_len: 0,
                 });
@@ -132,6 +136,7 @@ impl Engine {
                 entries.push(LsEntry {
                     name: m.filename,
                     is_dir: false,
+                    id: Some(m.id),
                     updated_at: Some(m.updated_at),
                     content_len: m.content.len(),
                 });

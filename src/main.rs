@@ -1,6 +1,7 @@
 mod db;
 mod engine;
 mod format;
+mod fuse;
 mod path;
 mod queries;
 mod state;
@@ -124,6 +125,19 @@ enum Commands {
         #[arg(short = 'n')]
         line_numbers: bool,
     },
+    /// Mount as FUSE filesystem
+    Mount {
+        /// Mount point path
+        mountpoint: String,
+        /// Run in foreground (don't daemonize)
+        #[arg(short = 'f', long)]
+        foreground: bool,
+    },
+    /// Unmount FUSE filesystem
+    Unmount {
+        /// Mount point to unmount
+        mountpoint: String,
+    },
     /// Search by filename/metadata
     Find {
         /// Path scope
@@ -147,10 +161,36 @@ fn read_stdin() -> String {
     buf.trim_end().to_string()
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let cli = Cli::parse();
 
+    // Mount/Unmount run outside tokio — they create their own runtime
+    match cli.command {
+        Commands::Mount {
+            mountpoint,
+            foreground,
+        } => {
+            if let Err(e) = fuse::mount(&db_path(), &mount_point(), &mountpoint, foreground) {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+            return;
+        }
+        Commands::Unmount { mountpoint } => {
+            if let Err(e) = fuse::unmount(&mountpoint) {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+            return;
+        }
+        other => {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(run_command(other));
+        }
+    }
+}
+
+async fn run_command(command: Commands) {
     let database = match db::open(&db_path()).await {
         Ok(db) => db,
         Err(e) => {
@@ -172,7 +212,7 @@ async fn main() {
 
     let eng = engine::Engine::new(conn, state_path(), mount_point());
 
-    let result = match cli.command {
+    let result = match command {
         Commands::Cd { path } => {
             let mount = mount_point();
             let target = path.as_deref().unwrap_or(&mount);
@@ -292,6 +332,7 @@ async fn main() {
                 Err(e) => Err(e),
             }
         }
+        Commands::Mount { .. } | Commands::Unmount { .. } => unreachable!(),
     };
 
     if let Err(e) = result {
