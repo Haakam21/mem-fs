@@ -86,6 +86,13 @@ fi
 
 echo "Mounted (PID $MOUNT_PID)"
 
+# --- Seed starter facets so agents see the pattern ---
+
+if [ -z "$(ls "$MOUNT_PATH" 2>/dev/null)" ]; then
+    mkdir -p "$MOUNT_PATH/people" "$MOUNT_PATH/topics" "$MOUNT_PATH/dates"
+    echo "Seeded starter facets: people/, topics/, dates/"
+fi
+
 # --- Create CLAUDE.md ---
 
 CLAUDE_MD="$INSTALL_BASE/CLAUDE.md"
