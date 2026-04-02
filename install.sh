@@ -3,7 +3,8 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Haakam21/mem-fs/main/install.sh | bash
-#   curl -fsSL ... | bash -s /path/to/dir    # custom install directory
+#
+# Installs into the current directory: ./bin/memfs, ./memories/, ./CLAUDE.md
 #
 # Prerequisites:
 #   - macFUSE (macOS): https://macfuse.io
@@ -12,7 +13,7 @@
 
 set -euo pipefail
 
-INSTALL_BASE="${1:-$HOME/mem-fs}"
+INSTALL_BASE="${1:-$(pwd)}"
 MOUNT_PATH="$INSTALL_BASE/memories"
 BIN_DIR="$INSTALL_BASE/bin"
 REPO="Haakam21/mem-fs"
