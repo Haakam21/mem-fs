@@ -2,7 +2,7 @@
 # MemFS setup — builds, installs, mounts, and configures Claude Code integration.
 #
 # Usage:
-#   bash setup.sh                    # defaults: mount at ~/memories
+#   bash setup.sh                    # defaults: mount at ./memories
 #   bash setup.sh /path/to/memories  # custom mount point
 #
 # What it does:
@@ -13,10 +13,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MOUNT_PATH="${1:-$SCRIPT_DIR/memories}"
 MOUNT_PARENT="$(dirname "$MOUNT_PATH")"
 MOUNT_NAME="$(basename "$MOUNT_PATH")"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_DIR="$HOME/.local/bin"
 
 # --- Check prerequisites ---
@@ -112,12 +112,12 @@ MEMORIES_LINE="Your memories are in the ./$MOUNT_NAME directory."
 if [[ ! -f "$CLAUDE_MD" ]]; then
     echo "$MEMORIES_LINE" > "$CLAUDE_MD"
     echo "Created $CLAUDE_MD"
-elif ! grep -qF "$MOUNT_NAME" "$CLAUDE_MD" 2>/dev/null; then
+elif ! grep -qF "$MEMORIES_LINE" "$CLAUDE_MD" 2>/dev/null; then
     echo "" >> "$CLAUDE_MD"
     echo "$MEMORIES_LINE" >> "$CLAUDE_MD"
     echo "Appended to $CLAUDE_MD"
 else
-    echo "$CLAUDE_MD already mentions $MOUNT_NAME"
+    echo "$CLAUDE_MD already configured"
 fi
 
 echo ""
