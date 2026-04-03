@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -10,6 +10,7 @@ use fuser::{
     ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request,
 };
 
+use crate::db::Db;
 use crate::embeddings::Embedder;
 use crate::path;
 use crate::{db, queries};
@@ -31,6 +32,7 @@ pub struct MemfsFs {
     next_fh: AtomicU64,
     write_buffers: RwLock<HashMap<u64, Vec<u8>>>,
     read_cache: RwLock<HashMap<u64, Vec<u8>>>,
+    db: Arc<Db>,
     embedder: Option<Embedder>,
 
     uid: u32,
@@ -479,6 +481,8 @@ impl Filesystem for MemfsFs {
                 self.write_buffers.write().unwrap().insert(fh, Vec::new());
                 let now = SystemTime::now();
                 let attr = self.file_attr(ino, 0, now, now);
+                let db = self.db.clone();
+                self.runtime.spawn(async move { db.push().await });
                 reply.created(&TTL, &attr, 0, fh, 0);
             }
             Err(_) => reply.error(libc::EIO),
@@ -532,6 +536,7 @@ impl Filesystem for MemfsFs {
                     queries::update_memory_content(conn, id, &content).await
                 }) {
                     Ok(()) => {
+                        // Embed synchronously (fast, ~5-10ms)
                         if !content.is_empty() {
                             if let Some(ref embedder) = self.embedder {
                                 if let Ok(emb) = embedder.embed(&content) {
@@ -548,6 +553,9 @@ impl Filesystem for MemfsFs {
                                 }
                             }
                         }
+                        // Push to cloud in background (fire-and-forget)
+                        let db = self.db.clone();
+                        rt.spawn(async move { db.push().await });
                         reply.ok()
                     }
                     Err(_) => reply.error(libc::EIO),
@@ -655,6 +663,8 @@ impl Filesystem for MemfsFs {
         match result {
             Ok(()) => {
                 let ino = self.alloc_dir_ino(&child_path);
+                let db = self.db.clone();
+                self.runtime.spawn(async move { db.push().await });
                 reply.entry(&TTL, &self.dir_attr(ino), 0);
             }
             Err(_) => reply.error(libc::EIO),
@@ -692,7 +702,11 @@ impl Filesystem for MemfsFs {
         });
 
         match result {
-            Ok(()) => reply.ok(),
+            Ok(()) => {
+                let db = self.db.clone();
+                self.runtime.spawn(async move { db.push().await });
+                reply.ok()
+            }
             Err(_) => reply.error(libc::ENOENT),
         }
     }
@@ -728,7 +742,11 @@ impl Filesystem for MemfsFs {
         });
 
         match result {
-            Ok(()) => reply.ok(),
+            Ok(()) => {
+                let db = self.db.clone();
+                self.runtime.spawn(async move { db.push().await });
+                reply.ok()
+            }
             Err(_) => reply.error(libc::EIO),
         }
     }
@@ -822,7 +840,11 @@ impl Filesystem for MemfsFs {
         });
 
         match result {
-            Ok(()) => reply.ok(),
+            Ok(()) => {
+                let db = self.db.clone();
+                self.runtime.spawn(async move { db.push().await });
+                reply.ok()
+            }
             Err(_) => reply.error(libc::EIO),
         }
     }
@@ -839,7 +861,8 @@ pub fn mount(
     let runtime = tokio::runtime::Runtime::new()?;
 
     let database = runtime.block_on(db::open(db_path))?;
-    let conn = database.connect()?;
+    let db = Arc::new(database);
+    let conn = db.connect()?;
     runtime.block_on(db::migrate(&conn))?;
 
     let embedder = Embedder::try_load().unwrap_or(None);
@@ -862,6 +885,7 @@ pub fn mount(
         next_fh: AtomicU64::new(1),
         write_buffers: RwLock::new(HashMap::new()),
         read_cache: RwLock::new(HashMap::new()),
+        db,
         embedder,
         uid,
         gid,

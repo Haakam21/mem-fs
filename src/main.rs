@@ -126,6 +126,8 @@ enum Commands {
         #[arg(short = 'n')]
         line_numbers: bool,
     },
+    /// Sync memories with cloud
+    Sync,
     /// Mount as FUSE filesystem
     Mount {
         /// Mount point path
@@ -220,7 +222,8 @@ async fn run_command(command: Commands) {
             std::process::exit(1);
         }
     };
-    let conn = match database.connect() {
+    let db = std::sync::Arc::new(database);
+    let conn = match db.connect() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("memfs: failed to connect to database: {}", e);
@@ -245,7 +248,7 @@ async fn run_command(command: Commands) {
         _ => embeddings::Embedder::try_load().unwrap_or(None),
     };
 
-    let eng = engine::Engine::new(conn, state_path(), mount_point(), embedder);
+    let eng = engine::Engine::new(conn, db.clone(), state_path(), mount_point(), embedder);
 
     let result = match command {
         Commands::Cd { path } => {
@@ -390,6 +393,18 @@ async fn run_command(command: Commands) {
             }
             Err(e) => Err(e),
         },
+        Commands::Sync => {
+            match db.pull().await {
+                Ok(true) => println!("Synced from cloud"),
+                Ok(false) => println!("Already up to date"),
+                Err(e) => {
+                    eprintln!("memfs: sync failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            db.push().await;
+            Ok(())
+        }
         Commands::Mount { .. } | Commands::Unmount { .. } => unreachable!(),
     };
 
