@@ -188,8 +188,9 @@ impl Filesystem for MemfsFs {
             }
 
             // Check memory file tagged under this facet
+            let filters = parsed.filters.clone();
             match rt.block_on(async {
-                queries::get_memory_by_facet(conn, name_str, &facet).await
+                queries::get_memory_by_facet(conn, name_str, &facet, &filters).await
             }) {
                 Ok(Some(m)) => {
                     let ino = Self::file_ino(m.id);
@@ -268,11 +269,18 @@ impl Filesystem for MemfsFs {
                 }
             } else if parsed.is_facet_level() {
                 let facet = parsed.trailing_facet.as_ref().unwrap();
-                for v in queries::list_values(conn, facet, &parsed.filters).await? {
-                    items.push((v, true, None));
+                let values = queries::list_values(conn, facet, &parsed.filters).await?;
+                let value_set: std::collections::HashSet<&str> =
+                    values.iter().map(|v| v.as_str()).collect();
+                for v in &values {
+                    items.push((v.clone(), true, None));
                 }
-                for m in queries::list_memory_stubs_by_facet(conn, facet).await? {
-                    items.push((m.filename, false, Some(m.id)));
+                // Show files at facet-level, excluding any whose name
+                // collides with a value directory (directories win)
+                for m in queries::list_memory_stubs_by_facet(conn, facet, &parsed.filters).await? {
+                    if !value_set.contains(m.filename.as_str()) {
+                        items.push((m.filename, false, Some(m.id)));
+                    }
                 }
             } else {
                 for f in queries::remaining_facets(conn, &parsed.filters).await? {
@@ -432,8 +440,11 @@ impl Filesystem for MemfsFs {
             // categorized (writing /memories/people/haakam.md tags with people:haakam).
             let mut tags = parsed.filters.clone();
             if let Some(ref facet) = parsed.trailing_facet {
-                let stem = filename.strip_suffix(".md").unwrap_or(filename);
-                tags.push(crate::path::Filter {
+                let stem = std::path::Path::new(filename)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(filename);
+                tags.push(path::Filter {
                     facet: facet.clone(),
                     value: stem.to_string(),
                 });

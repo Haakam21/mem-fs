@@ -405,53 +405,107 @@ pub async fn rename_memory(conn: &Connection, id: i64, new_filename: &str) -> Re
     Ok(())
 }
 
-/// Get a memory by filename that has any tag under the given facet.
-/// Used by FUSE lookup at facet-level.
+/// Get a memory by filename that has any tag under the given facet,
+/// scoped by existing filters. Used by FUSE lookup at facet-level.
 pub async fn get_memory_by_facet(
     conn: &Connection,
     filename: &str,
     facet: &str,
+    filters: &[Filter],
 ) -> Result<Option<Memory>> {
-    let mut rows = conn
-        .query(
+    if filters.is_empty() {
+        let mut rows = conn
+            .query(
+                "SELECT DISTINCT m.id, m.filename, m.content, m.created_at, m.updated_at \
+                 FROM memories m JOIN tags t ON t.memory_id = m.id \
+                 WHERE m.filename = ?1 AND t.facet = ?2 LIMIT 1",
+                [filename, facet],
+            )
+            .await?;
+        match rows.next().await? {
+            Some(row) => {
+                let mut m = row_to_memory(&row)?;
+                m.tags = get_tags(conn, m.id).await?;
+                Ok(Some(m))
+            }
+            None => Ok(None),
+        }
+    } else {
+        let memory_ids = get_matching_memory_ids(conn, filters).await?;
+        if memory_ids.is_empty() {
+            return Ok(None);
+        }
+        let (id_placeholders, mut id_params) = build_id_in_clause(&memory_ids, 0);
+        let fname_idx = memory_ids.len() + 1;
+        let facet_idx = memory_ids.len() + 2;
+        let sql = format!(
             "SELECT DISTINCT m.id, m.filename, m.content, m.created_at, m.updated_at \
              FROM memories m JOIN tags t ON t.memory_id = m.id \
-             WHERE m.filename = ?1 AND t.facet = ?2 LIMIT 1",
-            [filename, facet],
-        )
-        .await?;
-    match rows.next().await? {
-        Some(row) => {
-            let mut m = row_to_memory(&row)?;
-            m.tags = get_tags(conn, m.id).await?;
-            Ok(Some(m))
+             WHERE m.id IN ({}) AND m.filename = ?{} AND t.facet = ?{} LIMIT 1",
+            id_placeholders, fname_idx, facet_idx
+        );
+        id_params.push(turso::Value::from(filename));
+        id_params.push(turso::Value::from(facet));
+        let mut rows = conn.query(&sql, id_params).await?;
+        match rows.next().await? {
+            Some(row) => {
+                let mut m = row_to_memory(&row)?;
+                m.tags = get_tags(conn, m.id).await?;
+                Ok(Some(m))
+            }
+            None => Ok(None),
         }
-        None => Ok(None),
     }
 }
 
-/// List memory stubs that have any tag under the given facet.
-/// Used by FUSE readdir at facet-level.
+/// List memory stubs that have any tag under the given facet,
+/// scoped by existing filters. Used by FUSE readdir at facet-level.
 pub async fn list_memory_stubs_by_facet(
     conn: &Connection,
     facet: &str,
+    filters: &[Filter],
 ) -> Result<Vec<MemoryStub>> {
-    let mut rows = conn
-        .query(
+    if filters.is_empty() {
+        let mut rows = conn
+            .query(
+                "SELECT DISTINCT m.id, m.filename FROM memories m \
+                 JOIN tags t ON t.memory_id = m.id \
+                 WHERE t.facet = ?1 ORDER BY m.filename",
+                [facet],
+            )
+            .await?;
+        let mut mems = Vec::new();
+        while let Some(row) = rows.next().await? {
+            mems.push(MemoryStub {
+                id: row.get_value(0)?.as_integer().copied().unwrap_or(0),
+                filename: row.get_value(1)?.as_text().cloned().unwrap_or_default(),
+            });
+        }
+        Ok(mems)
+    } else {
+        let memory_ids = get_matching_memory_ids(conn, filters).await?;
+        if memory_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let (id_placeholders, mut id_params) = build_id_in_clause(&memory_ids, 0);
+        let facet_idx = memory_ids.len() + 1;
+        let sql = format!(
             "SELECT DISTINCT m.id, m.filename FROM memories m \
              JOIN tags t ON t.memory_id = m.id \
-             WHERE t.facet = ?1 ORDER BY m.filename",
-            [facet],
-        )
-        .await?;
-    let mut mems = Vec::new();
-    while let Some(row) = rows.next().await? {
-        mems.push(MemoryStub {
-            id: row.get_value(0)?.as_integer().copied().unwrap_or(0),
-            filename: row.get_value(1)?.as_text().cloned().unwrap_or_default(),
-        });
+             WHERE m.id IN ({}) AND t.facet = ?{} ORDER BY m.filename",
+            id_placeholders, facet_idx
+        );
+        id_params.push(turso::Value::from(facet));
+        let mut rows = conn.query(&sql, id_params).await?;
+        let mut mems = Vec::new();
+        while let Some(row) = rows.next().await? {
+            mems.push(MemoryStub {
+                id: row.get_value(0)?.as_integer().copied().unwrap_or(0),
+                filename: row.get_value(1)?.as_text().cloned().unwrap_or_default(),
+            });
+        }
+        Ok(mems)
     }
-    Ok(mems)
 }
 
 /// Lightweight result for readdir — id + filename only, no content or tags.
