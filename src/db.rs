@@ -14,14 +14,10 @@ pub enum Db {
 }
 
 impl Db {
-    pub fn connect(&self) -> Result<Connection> {
+    pub async fn connect(&self) -> Result<Connection> {
         match self {
             Db::Local(db) => Ok(db.connect()?),
-            Db::Sync(db) => {
-                // sync::Database::connect is async but returns the same Connection type
-                let rt = tokio::runtime::Handle::current();
-                Ok(rt.block_on(db.connect())?)
-            }
+            Db::Sync(db) => Ok(db.connect().await?),
         }
     }
 

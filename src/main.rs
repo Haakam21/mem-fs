@@ -223,7 +223,7 @@ async fn run_command(command: Commands) {
         }
     };
     let db = std::sync::Arc::new(database);
-    let conn = match db.connect() {
+    let conn = match db.connect().await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("memfs: failed to connect to database: {}", e);

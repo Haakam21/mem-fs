@@ -862,7 +862,7 @@ pub fn mount(
 
     let database = runtime.block_on(db::open(db_path))?;
     let db = Arc::new(database);
-    let conn = db.connect()?;
+    let conn = runtime.block_on(db.connect())?;
     runtime.block_on(db::migrate(&conn))?;
 
     let embedder = Embedder::try_load().unwrap_or(None);
