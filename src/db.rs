@@ -19,6 +19,8 @@ pub async fn open(db_path: &str) -> Result<Database> {
 
 /// Run schema migrations — create tables and indexes if they don't exist.
 pub async fn migrate(conn: &Connection) -> Result<()> {
+    // WAL mode allows concurrent readers (search binary + FUSE daemon)
+    let _ = conn.query("PRAGMA journal_mode=WAL", ()).await?;
     conn.execute(
         "CREATE TABLE IF NOT EXISTS memories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -159,6 +159,76 @@ fn model_dir() -> PathBuf {
     PathBuf::from(util::expand_tilde(&dir))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serialize_deserialize_roundtrip() {
+        let original = vec![0.1f32, -0.5, 1.0, 0.0, -1.0];
+        let bytes = Embedder::serialize_embedding(&original);
+        assert_eq!(bytes.len(), original.len() * 4);
+        let recovered = Embedder::deserialize_embedding(&bytes).unwrap();
+        assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn deserialize_invalid_length() {
+        assert!(Embedder::deserialize_embedding(&[1, 2, 3]).is_err());
+    }
+
+    #[test]
+    fn cosine_similarity_identical() {
+        let v = vec![1.0, 0.0, 0.0];
+        assert!((Embedder::cosine_similarity(&v, &v) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cosine_similarity_orthogonal() {
+        let a = vec![1.0, 0.0, 0.0];
+        let b = vec![0.0, 1.0, 0.0];
+        assert!(Embedder::cosine_similarity(&a, &b).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cosine_similarity_opposite() {
+        let a = vec![1.0, 0.0];
+        let b = vec![-1.0, 0.0];
+        assert!((Embedder::cosine_similarity(&a, &b) + 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn embed_produces_correct_dimension() {
+        let embedder = match Embedder::try_load().unwrap() {
+            Some(e) => e,
+            None => return, // skip if model not downloaded
+        };
+        let embedding = embedder.embed("Hello world").unwrap();
+        assert_eq!(embedding.len(), EMBEDDING_DIM);
+
+        // Should be L2-normalized (length ≈ 1.0)
+        let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn similar_texts_have_higher_similarity() {
+        let embedder = match Embedder::try_load().unwrap() {
+            Some(e) => e,
+            None => return,
+        };
+        let party = embedder.embed("birthday party celebration").unwrap();
+        let cake = embedder.embed("chocolate cake recipe baking").unwrap();
+        let unrelated = embedder.embed("quantum physics equations").unwrap();
+
+        let party_cake = Embedder::cosine_similarity(&party, &cake);
+        let party_physics = Embedder::cosine_similarity(&party, &unrelated);
+
+        // party + cake should be more similar than party + physics
+        assert!(party_cake > party_physics);
+    }
+}
+
 fn download_file(url: &str, dest: &Path, label: &str) -> Result<()> {
     eprintln!("Downloading {} from {}...", label, url);
     let status = std::process::Command::new("curl")

@@ -238,6 +238,27 @@ assert_contains "cat error message" "No such memory" "$output"
 
 echo
 
+# --- Test 15: reindex + search (requires model) ---
+echo "Test 15: semantic search"
+if $MEMFS reindex >/dev/null 2>&1; then
+    # Search for birthday-related content
+    output=$($MEMFS search "birthday celebration" 2>&1)
+    assert_contains "search finds birthday memory" "birthday" "$output"
+
+    # Search scoped to people/sister
+    output=$($MEMFS search "birthday" /memories/people/sister 2>&1)
+    assert_contains "scoped search finds memory" "birthday" "$output"
+
+    # Search should NOT find birthday when scoped to a different person
+    $MEMFS mkdir -p /memories/people/nobody
+    output=$($MEMFS search -t 0.0 "birthday" /memories/people/nobody 2>&1)
+    assert_eq "scoped search excludes unrelated" "" "$output"
+else
+    echo "  SKIP: embedding model not available"
+fi
+
+echo
+
 # --- Summary ---
 echo "================================"
 echo "Results: $PASS passed, $FAIL failed"
