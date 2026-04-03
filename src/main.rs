@@ -1,4 +1,5 @@
 mod db;
+mod embeddings;
 mod engine;
 mod format;
 mod fuse;
@@ -138,6 +139,27 @@ enum Commands {
         /// Mount point to unmount
         mountpoint: String,
     },
+    /// Semantic search by meaning
+    Search {
+        /// Natural language query
+        query: String,
+        /// Path scope
+        path: Option<String>,
+        /// Minimum similarity threshold (0.0-1.0)
+        #[arg(short = 't', long, default_value = "0.3")]
+        threshold: f32,
+        /// Maximum number of results
+        #[arg(short = 'k', long, default_value = "10")]
+        limit: usize,
+        /// Show full content
+        #[arg(short = 'v', long)]
+        verbose: bool,
+    },
+    /// Generate embeddings for all memories
+    Reindex {
+        /// Scope (optional path)
+        path: Option<String>,
+    },
     /// Search by filename/metadata
     Find {
         /// Path scope
@@ -210,7 +232,20 @@ async fn run_command(command: Commands) {
         std::process::exit(1);
     }
 
-    let eng = engine::Engine::new(conn, state_path(), mount_point());
+    let embedder = match &command {
+        Commands::Search { .. } | Commands::Reindex { .. } => {
+            match embeddings::Embedder::load_or_download() {
+                Ok(e) => Some(e),
+                Err(e) => {
+                    eprintln!("memfs: failed to load embedding model: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        _ => embeddings::Embedder::try_load().unwrap_or(None),
+    };
+
+    let eng = engine::Engine::new(conn, state_path(), mount_point(), embedder);
 
     let result = match command {
         Commands::Cd { path } => {
@@ -332,6 +367,29 @@ async fn run_command(command: Commands) {
                 Err(e) => Err(e),
             }
         }
+        Commands::Search {
+            query,
+            path,
+            threshold,
+            limit,
+            verbose,
+        } => match eng.search(&query, path.as_deref(), threshold, limit).await {
+            Ok(results) => {
+                let output = format::format_search(&results, verbose);
+                if !output.is_empty() {
+                    println!("{}", output);
+                }
+                Ok(())
+            }
+            Err(e) => Err(e),
+        },
+        Commands::Reindex { path } => match eng.reindex(path.as_deref()).await {
+            Ok(count) => {
+                println!("Reindexed {} memories", count);
+                Ok(())
+            }
+            Err(e) => Err(e),
+        },
         Commands::Mount { .. } | Commands::Unmount { .. } => unreachable!(),
     };
 

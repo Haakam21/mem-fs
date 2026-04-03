@@ -47,12 +47,18 @@ jobs:
         run: PKG_CONFIG_PATH="/usr/local/lib/pkgconfig" cargo test
 
       - name: Package
-        run: cp target/${{ matrix.target }}/release/memfs ${{ matrix.artifact }}
+        run: |
+          SUFFIX="${{ matrix.artifact }}"
+          SUFFIX="${SUFFIX#memfs-}"
+          cp target/${{ matrix.target }}/release/memfs ${{ matrix.artifact }}
+          cp target/${{ matrix.target }}/release/search "search-${SUFFIX}"
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}
+            search-*
 
   release:
     needs: build
@@ -68,6 +74,6 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            memfs-darwin-arm64/memfs-darwin-arm64
-            memfs-darwin-x86_64/memfs-darwin-x86_64
-            memfs-linux-x86_64/memfs-linux-x86_64
+            memfs-darwin-arm64/*
+            memfs-darwin-x86_64/*
+            memfs-linux-x86_64/*

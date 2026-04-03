@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
 use turso::Connection;
 
+use crate::embeddings::Embedder;
 use crate::path::{self, Filter, ParsedPath};
 use crate::queries::{self, Memory};
 use crate::state;
@@ -10,6 +11,7 @@ pub struct Engine {
     pub conn: Connection,
     pub state_path: String,
     pub mount_point: String,
+    pub embedder: Option<Embedder>,
 }
 
 /// An entry returned by `ls` — either a directory (facet/value) or a file (memory).
@@ -23,11 +25,17 @@ pub struct LsEntry {
 }
 
 impl Engine {
-    pub fn new(conn: Connection, state_path: String, mount_point: String) -> Self {
+    pub fn new(
+        conn: Connection,
+        state_path: String,
+        mount_point: String,
+        embedder: Option<Embedder>,
+    ) -> Self {
         Self {
             conn,
             state_path,
             mount_point,
+            embedder,
         }
     }
 
@@ -306,14 +314,39 @@ impl Engine {
             queries::create_facet(&self.conn, &tag.facet).await?;
             queries::ensure_value(&self.conn, &tag.facet, &tag.value).await?;
         }
-        queries::create_memory(&self.conn, filename, content, &tags).await?;
+        let id = queries::create_memory(&self.conn, filename, content, &tags).await?;
+        self.embed_memory(id, content).await;
         Ok(())
     }
 
     /// Append content to an existing memory.
     pub async fn append(&self, filename: &str, content: &str) -> Result<()> {
         let filters = self.current_filters()?;
-        queries::append_memory(&self.conn, filename, content, &filters).await
+        queries::append_memory(&self.conn, filename, content, &filters).await?;
+        // Re-embed with full content
+        if let Some(mem) = queries::get_memory(&self.conn, filename, &filters).await? {
+            self.embed_memory(mem.id, &mem.content).await;
+        }
+        Ok(())
+    }
+
+    /// Generate and store embedding for a memory (non-fatal if model unavailable).
+    async fn embed_memory(&self, id: i64, content: &str) {
+        if content.is_empty() {
+            return;
+        }
+        if let Some(ref embedder) = self.embedder {
+            if let Ok(embedding) = embedder.embed(content) {
+                let bytes = Embedder::serialize_embedding(&embedding);
+                let _ = queries::upsert_embedding(
+                    &self.conn,
+                    id,
+                    &bytes,
+                    embedder.model_version(),
+                )
+                .await;
+            }
+        }
     }
 
     // --- Search ---
@@ -419,5 +452,87 @@ impl Engine {
         }
 
         Ok(results)
+    }
+
+    // --- Semantic search ---
+
+    /// Search memories by semantic similarity.
+    pub async fn search(
+        &self,
+        query: &str,
+        scope: Option<&str>,
+        threshold: f32,
+        limit: usize,
+    ) -> Result<Vec<queries::SearchResult>> {
+        let embedder = self
+            .embedder
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("memfs: embedding model not loaded; run `memfs reindex` first"))?;
+
+        let filters = if let Some(scope_path) = scope {
+            let resolved = self.resolve_path(scope_path)?;
+            let parsed = path::parse(&resolved, &self.mount_point)?;
+            parsed.filters
+        } else {
+            self.current_filters()?
+        };
+
+        let query_embedding = embedder.embed(query)?;
+        let memory_embeddings = queries::list_memory_embeddings(&self.conn, &filters).await?;
+
+        let mut scored: Vec<queries::SearchResult> = memory_embeddings
+            .iter()
+            .filter_map(|(_, filename, content, emb_bytes)| {
+                let emb = Embedder::deserialize_embedding(emb_bytes).ok()?;
+                let score = Embedder::cosine_similarity(&query_embedding, &emb);
+                if score >= threshold {
+                    Some(queries::SearchResult {
+                        filename: filename.clone(),
+                        score,
+                        content: content.clone(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+        Ok(scored)
+    }
+
+    /// Generate embeddings for all memories (or scoped subset).
+    pub async fn reindex(&self, scope: Option<&str>) -> Result<usize> {
+        let embedder = self
+            .embedder
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("memfs: embedding model not loaded"))?;
+
+        let memories = if let Some(scope_path) = scope {
+            let resolved = self.resolve_path(scope_path)?;
+            let parsed = path::parse(&resolved, &self.mount_point)?;
+            queries::list_memories(&self.conn, &parsed.filters).await?
+        } else {
+            queries::list_memories(&self.conn, &[]).await?
+        };
+
+        let total = memories.len();
+        let mut count = 0;
+        for mem in &memories {
+            if let Ok(embedding) = embedder.embed(&mem.content) {
+                let bytes = Embedder::serialize_embedding(&embedding);
+                queries::upsert_embedding(&self.conn, mem.id, &bytes, embedder.model_version())
+                    .await?;
+            }
+            count += 1;
+            if count % 10 == 0 || count == total {
+                eprint!("\rEmbedded {}/{} memories...", count, total);
+            }
+        }
+        if total > 0 {
+            eprintln!();
+        }
+        Ok(count)
     }
 }

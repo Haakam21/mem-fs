@@ -57,7 +57,15 @@ echo "Downloading memfs ($ARTIFACT)..."
 gh release download --repo "$REPO" --pattern "$ARTIFACT" --dir "$BIN_DIR" --clobber
 mv "$BIN_DIR/$ARTIFACT" "$BIN_DIR/memfs"
 chmod +x "$BIN_DIR/memfs"
-echo "Installed to $BIN_DIR/memfs"
+
+# Install search binary to PATH so agents can discover it
+SEARCH_ARTIFACT="search-${ARTIFACT#memfs-}"
+echo "Downloading search ($SEARCH_ARTIFACT)..."
+gh release download --repo "$REPO" --pattern "$SEARCH_ARTIFACT" --dir "$HOME/.local/bin" --clobber 2>/dev/null && \
+    mv "$HOME/.local/bin/$SEARCH_ARTIFACT" "$HOME/.local/bin/search" && \
+    chmod +x "$HOME/.local/bin/search" && \
+    echo "Installed search to ~/.local/bin/search" || \
+    echo "Note: search binary not available in this release"
 
 # --- Mount ---
 

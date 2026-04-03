@@ -10,6 +10,7 @@ use fuser::{
     ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request,
 };
 
+use crate::embeddings::Embedder;
 use crate::path;
 use crate::{db, queries};
 
@@ -30,6 +31,7 @@ pub struct MemfsFs {
     next_fh: AtomicU64,
     write_buffers: RwLock<HashMap<u64, Vec<u8>>>,
     read_cache: RwLock<HashMap<u64, Vec<u8>>>,
+    embedder: Option<Embedder>,
 
     uid: u32,
     gid: u32,
@@ -529,7 +531,25 @@ impl Filesystem for MemfsFs {
                 match rt.block_on(async {
                     queries::update_memory_content(conn, id, &content).await
                 }) {
-                    Ok(()) => reply.ok(),
+                    Ok(()) => {
+                        if !content.is_empty() {
+                            if let Some(ref embedder) = self.embedder {
+                                if let Ok(emb) = embedder.embed(&content) {
+                                    let bytes = Embedder::serialize_embedding(&emb);
+                                    let _ = rt.block_on(async {
+                                        queries::upsert_embedding(
+                                            conn,
+                                            id,
+                                            &bytes,
+                                            embedder.model_version(),
+                                        )
+                                        .await
+                                    });
+                                }
+                            }
+                        }
+                        reply.ok()
+                    }
                     Err(_) => reply.error(libc::EIO),
                 }
                 return;
@@ -819,6 +839,8 @@ pub fn mount(
     let conn = database.connect()?;
     runtime.block_on(db::migrate(&conn))?;
 
+    let embedder = Embedder::try_load().unwrap_or(None);
+
     let uid = unsafe { libc::getuid() };
     let gid = unsafe { libc::getgid() };
 
@@ -837,6 +859,7 @@ pub fn mount(
         next_fh: AtomicU64::new(1),
         write_buffers: RwLock::new(HashMap::new()),
         read_cache: RwLock::new(HashMap::new()),
+        embedder,
         uid,
         gid,
     };

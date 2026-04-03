@@ -280,13 +280,88 @@ pub async fn append_memory(
     }
 }
 
-/// Delete a memory and all its tags.
+/// Delete a memory, its tags, and its embedding.
 pub async fn delete_memory(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("DELETE FROM embeddings WHERE memory_id = ?1", turso::params![id])
+        .await?;
     conn.execute("DELETE FROM tags WHERE memory_id = ?1", turso::params![id])
         .await?;
     conn.execute("DELETE FROM memories WHERE id = ?1", turso::params![id])
         .await?;
     Ok(())
+}
+
+/// Store or update an embedding for a memory.
+pub async fn upsert_embedding(
+    conn: &Connection,
+    memory_id: i64,
+    embedding: &[u8],
+    model_version: &str,
+) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO embeddings (memory_id, embedding, model_version) VALUES (?1, ?2, ?3)",
+        turso::params![memory_id, embedding, model_version],
+    )
+    .await?;
+    Ok(())
+}
+
+/// A search result with similarity score.
+#[derive(Debug)]
+pub struct SearchResult {
+    pub filename: String,
+    pub score: f32,
+    pub content: String,
+}
+
+/// Load memories and their embeddings, scoped by filters.
+pub async fn list_memory_embeddings(
+    conn: &Connection,
+    filters: &[Filter],
+) -> Result<Vec<(i64, String, String, Vec<u8>)>> {
+    if filters.is_empty() {
+        let mut rows = conn
+            .query(
+                "SELECT m.id, m.filename, m.content, e.embedding \
+                 FROM memories m JOIN embeddings e ON e.memory_id = m.id \
+                 ORDER BY m.filename",
+                (),
+            )
+            .await?;
+        let mut results = Vec::new();
+        while let Some(row) = rows.next().await? {
+            results.push((
+                row.get_value(0)?.as_integer().copied().unwrap_or(0),
+                row.get_value(1)?.as_text().cloned().unwrap_or_default(),
+                row.get_value(2)?.as_text().cloned().unwrap_or_default(),
+                row.get_value(3)?.as_blob().cloned().unwrap_or_default(),
+            ));
+        }
+        return Ok(results);
+    }
+
+    let memory_ids = get_matching_memory_ids(conn, filters).await?;
+    if memory_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let (id_placeholders, id_params) = build_id_in_clause(&memory_ids, 0);
+    let sql = format!(
+        "SELECT m.id, m.filename, m.content, e.embedding \
+         FROM memories m JOIN embeddings e ON e.memory_id = m.id \
+         WHERE m.id IN ({}) ORDER BY m.filename",
+        id_placeholders
+    );
+    let mut rows = conn.query(&sql, id_params).await?;
+    let mut results = Vec::new();
+    while let Some(row) = rows.next().await? {
+        results.push((
+            row.get_value(0)?.as_integer().copied().unwrap_or(0),
+            row.get_value(1)?.as_text().cloned().unwrap_or_default(),
+            row.get_value(2)?.as_text().cloned().unwrap_or_default(),
+            row.get_value(3)?.as_blob().cloned().unwrap_or_default(),
+        ));
+    }
+    Ok(results)
 }
 
 /// Remove a specific tag from a memory.

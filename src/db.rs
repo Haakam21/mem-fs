@@ -75,6 +75,17 @@ pub async fn migrate(conn: &Connection) -> Result<()> {
     )
     .await?;
 
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS embeddings (
+            memory_id INTEGER PRIMARY KEY,
+            embedding BLOB NOT NULL,
+            model_version TEXT NOT NULL DEFAULT 'all-MiniLM-L6-v2',
+            FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
+        )",
+        (),
+    )
+    .await?;
+
     Ok(())
 }
 

@@ -1,5 +1,5 @@
 use crate::engine::LsEntry;
-use crate::queries::{GrepResult, Memory};
+use crate::queries::{GrepResult, Memory, SearchResult};
 
 /// Format `ls` output in short (columnar) mode.
 pub fn format_ls(entries: &[LsEntry]) -> String {
@@ -109,4 +109,30 @@ pub fn format_grep(results: &[GrepResult], files_only: bool, line_numbers: bool)
 /// Format `find` results — one path per line.
 pub fn format_find(paths: &[String]) -> String {
     paths.join("\n")
+}
+
+/// Format semantic search results.
+pub fn format_search(results: &[SearchResult], verbose: bool) -> String {
+    if results.is_empty() {
+        return String::new();
+    }
+
+    let lines: Vec<String> = results
+        .iter()
+        .map(|r| {
+            if verbose {
+                format!("--- {} ({:.2}) ---\n{}", r.filename, r.score, r.content)
+            } else {
+                let preview = r.content.lines().next().unwrap_or("(empty)");
+                let preview = if preview.len() > 80 {
+                    format!("{}...", &preview[..77])
+                } else {
+                    preview.to_string()
+                };
+                format!("{} ({:.2}): {}", r.filename, r.score, preview)
+            }
+        })
+        .collect();
+
+    lines.join("\n")
 }
