@@ -116,7 +116,7 @@ fi
 # --- Create CLAUDE.md ---
 
 CLAUDE_MD="$INSTALL_BASE/CLAUDE.md"
-MEMORIES_LINE="Your memories are in the ./memories directory."
+MEMORIES_LINE="Your memories are in the ./$MOUNT_NAME directory. Use \`search \"query\"\` to find memories by meaning."
 
 if [[ ! -f "$CLAUDE_MD" ]]; then
     echo "$MEMORIES_LINE" > "$CLAUDE_MD"
