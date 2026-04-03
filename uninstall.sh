@@ -9,11 +9,15 @@
 set -euo pipefail
 
 PURGE=false
+INSTALL_BASE=""
 for arg in "$@"; do
-    [[ "$arg" == "--purge" ]] && PURGE=true
+    if [[ "$arg" == "--purge" ]]; then
+        PURGE=true
+    else
+        INSTALL_BASE="$arg"
+    fi
 done
-
-INSTALL_BASE="${1:-$(pwd)}"
+INSTALL_BASE="${INSTALL_BASE:-$(pwd)}"
 MOUNT_PATH="$INSTALL_BASE/memories"
 OS="$(uname -s)"
 
