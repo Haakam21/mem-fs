@@ -14,9 +14,6 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             artifact: memfs-darwin-arm64
-          - os: macos-14
-            target: x86_64-apple-darwin
-            artifact: memfs-darwin-x86_64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: memfs-linux-x86_64
