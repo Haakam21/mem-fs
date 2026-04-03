@@ -1,2 +1,3 @@
 /target
 .memfs.db*
+.env
