@@ -99,7 +99,12 @@ fi
 CLAUDE_SETTINGS_DIR="$INSTALL_BASE/.claude"
 CLAUDE_SETTINGS="$CLAUDE_SETTINGS_DIR/settings.json"
 mkdir -p "$CLAUDE_SETTINGS_DIR"
-echo '{"autoMemoryEnabled":false}' > "$CLAUDE_SETTINGS"
+if [[ ! -f "$CLAUDE_SETTINGS" ]]; then
+    echo '{"autoMemoryEnabled":false}' > "$CLAUDE_SETTINGS"
+elif ! grep -q "autoMemoryEnabled" "$CLAUDE_SETTINGS" 2>/dev/null; then
+    # Inject into existing settings object
+    sed -i '' 's/^{/{\"autoMemoryEnabled\":false,/' "$CLAUDE_SETTINGS"
+fi
 
 # --- Create CLAUDE.md ---
 
