@@ -15,7 +15,7 @@ use crate::{db, queries};
 
 const FILE_INODE_BASE: u64 = 1_000_000;
 const ROOT_INO: u64 = 1;
-const TTL: Duration = Duration::from_secs(1);
+const TTL: Duration = Duration::from_secs(0);
 const BLOCK_SIZE: u32 = 512;
 
 pub struct MemfsFs {
