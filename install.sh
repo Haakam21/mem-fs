@@ -94,6 +94,13 @@ if [ -z "$(ls "$MOUNT_PATH" 2>/dev/null)" ]; then
     echo "Seeded starter facets: people/, topics/, dates/, emotions/, locations/, projects/"
 fi
 
+# --- Disable Claude Code's built-in auto-memory ---
+
+CLAUDE_SETTINGS_DIR="$INSTALL_BASE/.claude"
+CLAUDE_SETTINGS="$CLAUDE_SETTINGS_DIR/settings.json"
+mkdir -p "$CLAUDE_SETTINGS_DIR"
+echo '{"autoMemoryEnabled":false}' > "$CLAUDE_SETTINGS"
+
 # --- Create CLAUDE.md ---
 
 CLAUDE_MD="$INSTALL_BASE/CLAUDE.md"
