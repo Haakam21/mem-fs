@@ -89,9 +89,8 @@ echo "Mounted (PID $MOUNT_PID)"
 # --- Seed starter facets so agents see the pattern ---
 
 if [ -z "$(ls "$MOUNT_PATH" 2>/dev/null)" ]; then
-    mkdir -p "$MOUNT_PATH/people" "$MOUNT_PATH/topics" "$MOUNT_PATH/dates" \
-             "$MOUNT_PATH/emotions" "$MOUNT_PATH/locations" "$MOUNT_PATH/projects"
-    echo "Seeded starter facets: people/, topics/, dates/, emotions/, locations/, projects/"
+    mkdir -p "$MOUNT_PATH/people" "$MOUNT_PATH/topics" "$MOUNT_PATH/dates" "$MOUNT_PATH/projects"
+    echo "Seeded starter facets: people/, topics/, dates/, projects/"
 fi
 
 # --- Disable Claude Code's built-in auto-memory ---
