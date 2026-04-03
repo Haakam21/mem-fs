@@ -38,14 +38,13 @@ fn main() {
     let search_dir = match &args.path {
         Some(p) => PathBuf::from(p),
         None => {
-            // Default: look for ./memories in current directory
-            let cwd = std::env::current_dir().unwrap_or_default();
-            let memories = cwd.join("memories");
-            if memories.is_dir() {
-                memories
-            } else {
-                eprintln!("search: no memories directory found. Specify a path.");
-                std::process::exit(1);
+            // Walk up from CWD looking for a directory containing "memories/"
+            match find_memories_dir() {
+                Some(d) => d,
+                None => {
+                    eprintln!("search: no memories directory found. Specify a path.");
+                    std::process::exit(1);
+                }
             }
         }
     };
@@ -116,6 +115,20 @@ fn main() {
                 preview.to_string()
             };
             println!("{} ({:.2}): {}", path, score, preview);
+        }
+    }
+}
+
+/// Walk up from CWD looking for a directory containing "memories/".
+fn find_memories_dir() -> Option<PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        let candidate = dir.join("memories");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        if !dir.pop() {
+            return None;
         }
     }
 }
