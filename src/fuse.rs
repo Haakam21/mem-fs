@@ -107,6 +107,25 @@ impl MemfsFs {
             .map(|dt| UNIX_EPOCH + Duration::from_secs(dt.timestamp() as u64))
             .unwrap_or(SystemTime::now())
     }
+
+    fn memory_file_attr(&self, mem: &queries::Memory) -> FileAttr {
+        let ino = Self::file_ino(mem.id);
+        let size = mem.content.len() as u64;
+        let mtime = Self::parse_time(&mem.updated_at);
+        let crtime = Self::parse_time(&mem.created_at);
+        self.file_attr(ino, size, mtime, crtime)
+    }
+
+    /// Load a memory by inode and return its FileAttr, or None if not found.
+    fn load_file_attr(&self, ino: u64) -> Option<FileAttr> {
+        let id = Self::memory_id(ino);
+        let conn = &self.conn;
+        let rt = &self.runtime;
+        match rt.block_on(async { queries::get_memory_by_id(conn, id).await }) {
+            Ok(Some(mem)) => Some(self.memory_file_attr(&mem)),
+            _ => None,
+        }
+    }
 }
 
 impl Filesystem for MemfsFs {
@@ -117,21 +136,10 @@ impl Filesystem for MemfsFs {
             } else {
                 reply.error(libc::ENOENT);
             }
-            return;
-        }
-
-        let id = Self::memory_id(ino);
-        let conn = &self.conn;
-        let rt = &self.runtime;
-        let result = rt.block_on(async { queries::get_memory_by_id(conn, id).await });
-        match result {
-            Ok(Some(mem)) => {
-                let size = mem.content.len() as u64;
-                let mtime = Self::parse_time(&mem.updated_at);
-                let crtime = Self::parse_time(&mem.created_at);
-                reply.attr(&TTL, &self.file_attr(ino, size, mtime, crtime));
-            }
-            _ => reply.error(libc::ENOENT),
+        } else if let Some(attr) = self.load_file_attr(ino) {
+            reply.attr(&TTL, &attr);
+        } else {
+            reply.error(libc::ENOENT);
         }
     }
 
@@ -192,13 +200,7 @@ impl Filesystem for MemfsFs {
             match rt.block_on(async {
                 queries::get_memory_by_facet(conn, name_str, &facet, &filters).await
             }) {
-                Ok(Some(m)) => {
-                    let ino = Self::file_ino(m.id);
-                    let size = m.content.len() as u64;
-                    let mtime = Self::parse_time(&m.updated_at);
-                    let crtime = Self::parse_time(&m.created_at);
-                    reply.entry(&TTL, &self.file_attr(ino, size, mtime, crtime), 0);
-                }
+                Ok(Some(m)) => reply.entry(&TTL, &self.memory_file_attr(&m), 0),
                 _ => reply.error(libc::ENOENT),
             }
         } else {
@@ -221,13 +223,7 @@ impl Filesystem for MemfsFs {
             // Check memory file
             let filters = parsed.filters.clone();
             match rt.block_on(async { queries::get_memory(conn, name_str, &filters).await }) {
-                Ok(Some(m)) => {
-                    let ino = Self::file_ino(m.id);
-                    let size = m.content.len() as u64;
-                    let mtime = Self::parse_time(&m.updated_at);
-                    let crtime = Self::parse_time(&m.created_at);
-                    reply.entry(&TTL, &self.file_attr(ino, size, mtime, crtime), 0);
-                }
+                Ok(Some(m)) => reply.entry(&TTL, &self.memory_file_attr(&m), 0),
                 _ => reply.error(libc::ENOENT),
             }
         }
@@ -578,23 +574,13 @@ impl Filesystem for MemfsFs {
             } else {
                 reply.error(libc::ENOENT);
             }
-        } else {
-            let id = Self::memory_id(ino);
-            let conn = &self.conn;
-            let rt = &self.runtime;
-            match rt.block_on(async { queries::get_memory_by_id(conn, id).await }) {
-                Ok(Some(mem)) => {
-                    let content_size = if size == Some(0) {
-                        0u64
-                    } else {
-                        mem.content.len() as u64
-                    };
-                    let mtime = Self::parse_time(&mem.updated_at);
-                    let crtime = Self::parse_time(&mem.created_at);
-                    reply.attr(&TTL, &self.file_attr(ino, content_size, mtime, crtime));
-                }
-                _ => reply.error(libc::ENOENT),
+        } else if let Some(mut attr) = self.load_file_attr(ino) {
+            if size == Some(0) {
+                attr.size = 0;
             }
+            reply.attr(&TTL, &attr);
+        } else {
+            reply.error(libc::ENOENT);
         }
     }
 
