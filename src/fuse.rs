@@ -174,13 +174,29 @@ impl Filesystem for MemfsFs {
                 _ => reply.error(libc::ENOENT),
             }
         } else if parsed.is_facet_level() {
-            // At facet level: name must be a value
+            // At facet level: name could be a value (dir) or a memory file
             let facet = parsed.trailing_facet.as_ref().unwrap().clone();
-            match rt.block_on(async { queries::value_exists(conn, &facet, name_str).await }) {
-                Ok(true) => {
-                    let child_path = format!("{}/{}", parent_path, name_str);
-                    let ino = self.alloc_dir_ino(&child_path);
-                    reply.entry(&TTL, &self.dir_attr(ino), 0);
+
+            // Check value first (directories win)
+            if let Ok(true) =
+                rt.block_on(async { queries::value_exists(conn, &facet, name_str).await })
+            {
+                let child_path = format!("{}/{}", parent_path, name_str);
+                let ino = self.alloc_dir_ino(&child_path);
+                reply.entry(&TTL, &self.dir_attr(ino), 0);
+                return;
+            }
+
+            // Check memory file tagged under this facet
+            match rt.block_on(async {
+                queries::get_memory_by_facet(conn, name_str, &facet).await
+            }) {
+                Ok(Some(m)) => {
+                    let ino = Self::file_ino(m.id);
+                    let size = m.content.len() as u64;
+                    let mtime = Self::parse_time(&m.updated_at);
+                    let crtime = Self::parse_time(&m.created_at);
+                    reply.entry(&TTL, &self.file_attr(ino, size, mtime, crtime), 0);
                 }
                 _ => reply.error(libc::ENOENT),
             }
@@ -254,6 +270,9 @@ impl Filesystem for MemfsFs {
                 let facet = parsed.trailing_facet.as_ref().unwrap();
                 for v in queries::list_values(conn, facet, &parsed.filters).await? {
                     items.push((v, true, None));
+                }
+                for m in queries::list_memory_stubs_by_facet(conn, facet).await? {
+                    items.push((m.filename, false, Some(m.id)));
                 }
             } else {
                 for f in queries::remaining_facets(conn, &parsed.filters).await? {
@@ -407,7 +426,20 @@ impl Filesystem for MemfsFs {
         let mp = &self.mount_point;
         let result = rt.block_on(async {
             let parsed = path::parse(&parent_path, mp)?;
-            for f in &parsed.filters {
+
+            // Build the tag set. At facet-level (e.g. /memories/people/),
+            // auto-tag with facet:filename_stem so the file is properly
+            // categorized (writing /memories/people/haakam.md tags with people:haakam).
+            let mut tags = parsed.filters.clone();
+            if let Some(ref facet) = parsed.trailing_facet {
+                let stem = filename.strip_suffix(".md").unwrap_or(filename);
+                tags.push(crate::path::Filter {
+                    facet: facet.clone(),
+                    value: stem.to_string(),
+                });
+            }
+
+            for f in &tags {
                 queries::create_facet(conn, &f.facet).await?;
                 queries::ensure_value(conn, &f.facet, &f.value).await?;
             }
@@ -417,13 +449,13 @@ impl Filesystem for MemfsFs {
             // `cp /memories/A/1/note.md /memories/B/2/note.md` add tags
             // rather than create a separate copy.
             if let Some(existing) = queries::get_memory(conn, filename, &[]).await? {
-                for f in &parsed.filters {
+                for f in &tags {
                     queries::add_tag(conn, existing.id, &f.facet, &f.value).await?;
                 }
                 return Ok(existing.id);
             }
 
-            queries::create_memory(conn, filename, "", &parsed.filters).await
+            queries::create_memory(conn, filename, "", &tags).await
         });
 
         match result {
