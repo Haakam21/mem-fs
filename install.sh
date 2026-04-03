@@ -4,7 +4,7 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Haakam21/mem-fs/main/install.sh | bash
 #
-# Installs binary to ~/.local/bin, mounts ./memories/, creates ./CLAUDE.md
+# Installs into current directory: .memfs/, memories/, CLAUDE.md
 #
 # Prerequisites:
 #   - macFUSE (macOS): https://macfuse.io
@@ -15,6 +15,7 @@ set -euo pipefail
 
 INSTALL_BASE="${1:-$(pwd)}"
 MOUNT_PATH="$INSTALL_BASE/memories"
+MEMFS_DIR="$INSTALL_BASE/.memfs"
 BIN_DIR="$HOME/.memfs"
 REPO="Haakam21/mem-fs"
 
@@ -50,7 +51,11 @@ if ! command -v gh &>/dev/null; then
     exit 1
 fi
 
-# --- Download binary ---
+# --- Create .memfs directory ---
+
+mkdir -p "$MEMFS_DIR"
+
+# --- Download binaries ---
 
 mkdir -p "$BIN_DIR"
 echo "Downloading memfs ($ARTIFACT)..."
@@ -80,7 +85,7 @@ if mount | grep -q "$MOUNT_PATH"; then
 fi
 
 mkdir -p "$MOUNT_PATH"
-export MEMFS_DB="$INSTALL_BASE/.memfs.db"
+export MEMFS_DB="$MEMFS_DIR/db"
 echo "Mounting memfs at $MOUNT_PATH..."
 "$BIN_DIR/memfs" mount -f "$MOUNT_PATH" &
 MOUNT_PID=$!
@@ -109,7 +114,6 @@ mkdir -p "$CLAUDE_SETTINGS_DIR"
 if [[ ! -f "$CLAUDE_SETTINGS" ]]; then
     echo '{"autoMemoryEnabled":false}' > "$CLAUDE_SETTINGS"
 elif ! grep -q "autoMemoryEnabled" "$CLAUDE_SETTINGS" 2>/dev/null; then
-    # Inject into existing settings object
     sed -i '' 's/^{/{\"autoMemoryEnabled\":false,/' "$CLAUDE_SETTINGS"
 fi
 
@@ -127,10 +131,13 @@ fi
 
 echo ""
 echo "=== MemFS is ready ==="
-echo "  Install dir:  $INSTALL_BASE"
 echo "  Mount point:  $MOUNT_PATH"
-echo "  Database:     $MEMFS_DB"
+echo "  Data dir:     $MEMFS_DIR"
 echo "  Claude hint:  $CLAUDE_MD"
 echo ""
+echo "To enable cloud sync, create $MEMFS_DIR/config:"
+echo "  TURSO_URL=libsql://your-db.turso.io"
+echo "  TURSO_TOKEN=your-token"
+echo ""
 echo "To unmount:     $BIN_DIR/memfs unmount $MOUNT_PATH"
-echo "To remount:     MEMFS_DB=$MEMFS_DB $BIN_DIR/memfs mount -f $MOUNT_PATH &"
+echo "To remount:     MEMFS_DB=$MEMFS_DIR/db $BIN_DIR/memfs mount -f $MOUNT_PATH &"

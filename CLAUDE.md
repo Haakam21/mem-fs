@@ -70,8 +70,10 @@ Never use subqueries with compound SELECT in Turso — they fail at runtime.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MEMFS_MOUNT` | `/memories` | Virtual mount point |
-| `MEMFS_DB` | `./.memfs.db` | Turso database file |
-| `MEMFS_STATE` | `~/.memfs_cwd` | Virtual CWD state file |
+| `MEMFS_DB` | `./.memfs/db` | Turso database file |
+| `MEMFS_STATE` | `./.memfs/state` | Virtual CWD state file |
+
+All per-install data lives in `.memfs/`: database, CWD state, and optional `config` file for Turso Cloud credentials (`TURSO_URL` and `TURSO_TOKEN`).
 
 ## Commands
 

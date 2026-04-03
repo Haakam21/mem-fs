@@ -1,3 +1,4 @@
 /target
+.memfs/
 .memfs.db*
 .env

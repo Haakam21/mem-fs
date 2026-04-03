@@ -4,7 +4,7 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Haakam21/mem-fs/main/uninstall.sh | bash
-#   curl -fsSL ... | bash -s --purge    # also delete database and models
+#   curl -fsSL ... | bash -s -- --purge    # also delete database and models
 
 set -euo pipefail
 
@@ -18,7 +18,9 @@ for arg in "$@"; do
     fi
 done
 INSTALL_BASE="${INSTALL_BASE:-$(pwd)}"
+
 MOUNT_PATH="$INSTALL_BASE/memories"
+MEMFS_DIR="$INSTALL_BASE/.memfs"
 OS="$(uname -s)"
 
 # --- Unmount ---
@@ -37,7 +39,6 @@ rmdir "$MOUNT_PATH" 2>/dev/null || true
 # --- Remove binaries ---
 
 rm -f "$HOME/.memfs/memfs"
-rmdir "$HOME/.memfs" 2>/dev/null || true
 rm -f "$HOME/.local/bin/search"
 echo "Removed binaries"
 
@@ -50,11 +51,11 @@ echo "Removed config"
 # --- Purge data (optional) ---
 
 if $PURGE; then
-    rm -f "$INSTALL_BASE/.memfs.db" "$INSTALL_BASE/.memfs.db-wal" "$INSTALL_BASE/.memfs.db-shm"
-    rm -rf "$HOME/.memfs/models"
-    echo "Purged database and models"
+    rm -rf "$MEMFS_DIR"
+    rm -rf "$HOME/.memfs"
+    echo "Purged .memfs directory and models"
 else
-    echo "Database preserved at $INSTALL_BASE/.memfs.db (use --purge to delete)"
+    echo "Data preserved at $MEMFS_DIR (use --purge to delete)"
 fi
 
 echo "MemFS uninstalled."

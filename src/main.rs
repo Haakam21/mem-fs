@@ -13,8 +13,8 @@ use std::env;
 use std::io::Read;
 
 const DEFAULT_MOUNT: &str = "/memories";
-const DEFAULT_STATE: &str = "~/.memfs_cwd";
-const DEFAULT_DB: &str = "./.memfs.db";
+const DEFAULT_STATE: &str = "./.memfs/state";
+const DEFAULT_DB: &str = "./.memfs/db";
 
 fn mount_point() -> String {
     env::var("MEMFS_MOUNT").unwrap_or_else(|_| DEFAULT_MOUNT.to_string())

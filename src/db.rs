@@ -37,8 +37,38 @@ impl Db {
     }
 }
 
-/// Open (or create) a Turso database. Uses cloud sync if MEMFS_TURSO_URL
-/// and MEMFS_TURSO_TOKEN env vars are set, otherwise local-only.
+/// Read Turso credentials from .memfs/config (next to DB) or env vars.
+fn turso_config(db_path: &str) -> (Option<String>, Option<String>) {
+    // Env vars take priority
+    let url = std::env::var("MEMFS_TURSO_URL").ok();
+    let token = std::env::var("MEMFS_TURSO_TOKEN").ok();
+    if url.is_some() && token.is_some() {
+        return (url, token);
+    }
+
+    // Fall back to config file next to the DB
+    let config_path = Path::new(db_path).parent().map(|p| p.join("config"));
+    if let Some(config_path) = config_path {
+        if let Ok(content) = std::fs::read_to_string(&config_path) {
+            let mut cfg_url = url;
+            let mut cfg_token = token;
+            for line in content.lines() {
+                let line = line.trim();
+                if let Some(val) = line.strip_prefix("TURSO_URL=") {
+                    cfg_url = Some(val.to_string());
+                } else if let Some(val) = line.strip_prefix("TURSO_TOKEN=") {
+                    cfg_token = Some(val.to_string());
+                }
+            }
+            return (cfg_url, cfg_token);
+        }
+    }
+
+    (url, token)
+}
+
+/// Open (or create) a Turso database. Uses cloud sync if credentials are
+/// configured (via .memfs/config file or MEMFS_TURSO_URL/TOKEN env vars).
 pub async fn open(db_path: &str) -> Result<Db> {
     let path = util::expand_tilde(db_path);
 
@@ -46,8 +76,7 @@ pub async fn open(db_path: &str) -> Result<Db> {
         std::fs::create_dir_all(parent)?;
     }
 
-    let turso_url = std::env::var("MEMFS_TURSO_URL").ok();
-    let turso_token = std::env::var("MEMFS_TURSO_TOKEN").ok();
+    let (turso_url, turso_token) = turso_config(&path);
 
     match (turso_url, turso_token) {
         (Some(url), Some(token)) => {
