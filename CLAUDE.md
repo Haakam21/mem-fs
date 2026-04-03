@@ -73,7 +73,7 @@ Never use subqueries with compound SELECT in Turso — they fail at runtime.
 | `MEMFS_DB` | `./.memfs/db` | Turso database file |
 | `MEMFS_STATE` | `./.memfs/state` | Virtual CWD state file |
 
-All per-install data lives in `.memfs/`: database, CWD state, and optional `config.json` for Turso Cloud sync. On mount, if credentials are present, pulls latest from cloud automatically.
+All per-install data lives in `.memfs/`: database, CWD state, and optional `settings.json` for Turso Cloud sync. On mount, if credentials are present, pulls latest from cloud automatically.
 
 ## Commands
 

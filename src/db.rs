@@ -34,11 +34,11 @@ impl Db {
     }
 }
 
-/// Read Turso credentials from .memfs/config.json (next to the DB file).
+/// Read Turso credentials from .memfs/settings.json (next to the DB file).
 /// Returns (url, token) if both are present, otherwise (None, None).
 fn turso_config(db_path: &str) -> (Option<String>, Option<String>) {
     let config_path = match Path::new(db_path).parent() {
-        Some(p) => p.join("config.json"),
+        Some(p) => p.join("settings.json"),
         None => return (None, None),
     };
 
@@ -67,7 +67,7 @@ fn extract_json_string(json: &str, key: &str) -> Option<String> {
     Some(after_quote[..end].to_string())
 }
 
-/// Open (or create) a Turso database. Uses cloud sync if .memfs/config.json
+/// Open (or create) a Turso database. Uses cloud sync if .memfs/settings.json
 /// contains turso_url and turso_token, otherwise local-only.
 pub async fn open(db_path: &str) -> Result<Db> {
     let path = util::expand_tilde(db_path);
