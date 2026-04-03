@@ -1,8 +1,10 @@
-pub mod db;
 pub mod embeddings;
-pub mod engine;
 pub mod format;
-pub mod path;
 pub mod queries;
-pub mod state;
-pub mod util;
+
+// Internal modules — used by main binary and lib internals, not by search binary
+pub(crate) mod db;
+pub(crate) mod engine;
+pub(crate) mod path;
+pub(crate) mod state;
+pub(crate) mod util;

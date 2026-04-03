@@ -125,7 +125,8 @@ pub fn format_search(results: &[SearchResult], verbose: bool) -> String {
             } else {
                 let preview = r.content.lines().next().unwrap_or("(empty)");
                 let preview = if preview.len() > 80 {
-                    format!("{}...", &preview[..77])
+                    let end = preview.char_indices().nth(77).map(|(i, _)| i).unwrap_or(preview.len());
+                    format!("{}...", &preview[..end])
                 } else {
                     preview.to_string()
                 };

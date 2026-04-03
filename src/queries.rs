@@ -291,6 +291,16 @@ pub async fn delete_memory(conn: &Connection, id: i64) -> Result<()> {
     Ok(())
 }
 
+/// Delete an embedding (e.g., when content is truncated).
+pub async fn delete_embedding(conn: &Connection, memory_id: i64) -> Result<()> {
+    conn.execute(
+        "DELETE FROM embeddings WHERE memory_id = ?1",
+        turso::params![memory_id],
+    )
+    .await?;
+    Ok(())
+}
+
 /// Store or update an embedding for a memory.
 pub async fn upsert_embedding(
     conn: &Connection,

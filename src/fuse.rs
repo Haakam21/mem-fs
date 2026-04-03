@@ -583,7 +583,10 @@ impl Filesystem for MemfsFs {
                 let conn = &self.conn;
                 let rt = &self.runtime;
                 if rt
-                    .block_on(async { queries::update_memory_content(conn, id, "").await })
+                    .block_on(async {
+                        queries::update_memory_content(conn, id, "").await?;
+                        queries::delete_embedding(conn, id).await
+                    })
                     .is_err()
                 {
                     reply.error(libc::EIO);

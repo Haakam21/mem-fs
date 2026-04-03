@@ -3,6 +3,7 @@ use clap::Parser;
 use std::path::{Path, PathBuf};
 
 use memfs::embeddings::Embedder;
+use memfs::queries::SearchResult;
 
 #[derive(Parser)]
 #[command(name = "search", about = "Search memories by meaning")]
@@ -24,12 +25,6 @@ struct Args {
     /// Show full content
     #[arg(short = 'v', long)]
     verbose: bool,
-}
-
-struct MemoryFile {
-    path: String,
-    content: String,
-    embedding: Vec<f32>,
 }
 
 fn main() {
@@ -80,15 +75,21 @@ fn main() {
     };
 
     // Deduplicate files with identical content (same memory appears at
-    // multiple paths in the faceted filesystem)
-    let mut seen_content = std::collections::HashSet::new();
+    // multiple paths in the faceted filesystem). Use content hash to
+    // avoid cloning full content into the set.
+    let mut seen_hashes = std::collections::HashSet::new();
     let files: Vec<_> = files
         .into_iter()
-        .filter(|(_, content)| seen_content.insert(content.clone()))
+        .filter(|(_, content)| {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            content.hash(&mut h);
+            seen_hashes.insert(h.finish())
+        })
         .collect();
 
-    // Embed each file and rank
-    let mut results: Vec<(String, f32, String)> = Vec::new();
+    // Embed each file and rank by similarity
+    let mut results: Vec<SearchResult> = Vec::new();
     for (path, content) in &files {
         if content.trim().is_empty() {
             continue;
@@ -96,26 +97,21 @@ fn main() {
         if let Ok(embedding) = embedder.embed(content) {
             let score = Embedder::cosine_similarity(&query_embedding, &embedding);
             if score >= args.threshold {
-                results.push((path.clone(), score, content.clone()));
+                results.push(SearchResult {
+                    filename: path.clone(),
+                    score,
+                    content: content.clone(),
+                });
             }
         }
     }
 
-    results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     results.truncate(args.limit);
 
-    for (path, score, content) in &results {
-        if args.verbose {
-            println!("--- {} ({:.2}) ---\n{}", path, score, content);
-        } else {
-            let preview = content.lines().next().unwrap_or("(empty)");
-            let preview = if preview.len() > 80 {
-                format!("{}...", &preview[..77])
-            } else {
-                preview.to_string()
-            };
-            println!("{} ({:.2}): {}", path, score, preview);
-        }
+    let output = memfs::format::format_search(&results, args.verbose);
+    if !output.is_empty() {
+        println!("{}", output);
     }
 }
 
