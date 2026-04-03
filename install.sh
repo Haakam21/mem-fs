@@ -15,7 +15,7 @@ set -euo pipefail
 
 INSTALL_BASE="${1:-$(pwd)}"
 MOUNT_PATH="$INSTALL_BASE/memories"
-BIN_DIR="$HOME/.local/bin"
+BIN_DIR="$HOME/.memfs"
 REPO="Haakam21/mem-fs"
 
 # --- Detect platform ---
