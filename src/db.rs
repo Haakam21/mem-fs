@@ -1,13 +1,10 @@
 use anyhow::Result;
 use std::path::Path;
-use std::sync::Arc;
 use turso::Connection;
 
 use crate::util;
 
 /// Database wrapper supporting both local-only and cloud sync modes.
-/// When `MEMFS_TURSO_URL` and `MEMFS_TURSO_TOKEN` are set, uses an embedded
-/// replica that syncs with Turso Cloud. Otherwise, uses a local-only database.
 pub enum Db {
     Local(turso::Database),
     Sync(turso::sync::Database),
@@ -37,38 +34,41 @@ impl Db {
     }
 }
 
-/// Read Turso credentials from .memfs/config (next to DB) or env vars.
+/// Read Turso credentials from .memfs/config.json (next to the DB file).
+/// Returns (url, token) if both are present, otherwise (None, None).
 fn turso_config(db_path: &str) -> (Option<String>, Option<String>) {
-    // Env vars take priority
-    let url = std::env::var("MEMFS_TURSO_URL").ok();
-    let token = std::env::var("MEMFS_TURSO_TOKEN").ok();
-    if url.is_some() && token.is_some() {
-        return (url, token);
-    }
+    let config_path = match Path::new(db_path).parent() {
+        Some(p) => p.join("config.json"),
+        None => return (None, None),
+    };
 
-    // Fall back to config file next to the DB
-    let config_path = Path::new(db_path).parent().map(|p| p.join("config"));
-    if let Some(config_path) = config_path {
-        if let Ok(content) = std::fs::read_to_string(&config_path) {
-            let mut cfg_url = url;
-            let mut cfg_token = token;
-            for line in content.lines() {
-                let line = line.trim();
-                if let Some(val) = line.strip_prefix("TURSO_URL=") {
-                    cfg_url = Some(val.to_string());
-                } else if let Some(val) = line.strip_prefix("TURSO_TOKEN=") {
-                    cfg_token = Some(val.to_string());
-                }
-            }
-            return (cfg_url, cfg_token);
-        }
-    }
+    let content = match std::fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(_) => return (None, None),
+    };
 
+    // Minimal JSON parsing — look for "turso_url" and "turso_token" string values
+    let url = extract_json_string(&content, "turso_url");
+    let token = extract_json_string(&content, "turso_token");
     (url, token)
 }
 
-/// Open (or create) a Turso database. Uses cloud sync if credentials are
-/// configured (via .memfs/config file or MEMFS_TURSO_URL/TOKEN env vars).
+/// Extract a string value from a JSON object by key (simple, no full parser needed).
+fn extract_json_string(json: &str, key: &str) -> Option<String> {
+    let pattern = format!("\"{}\"", key);
+    let idx = json.find(&pattern)?;
+    let after_key = &json[idx + pattern.len()..];
+    // Skip whitespace and colon
+    let after_colon = after_key.trim_start().strip_prefix(':')?;
+    let after_colon = after_colon.trim_start();
+    // Extract quoted string value
+    let after_quote = after_colon.strip_prefix('"')?;
+    let end = after_quote.find('"')?;
+    Some(after_quote[..end].to_string())
+}
+
+/// Open (or create) a Turso database. Uses cloud sync if .memfs/config.json
+/// contains turso_url and turso_token, otherwise local-only.
 pub async fn open(db_path: &str) -> Result<Db> {
     let path = util::expand_tilde(db_path);
 
@@ -86,6 +86,8 @@ pub async fn open(db_path: &str) -> Result<Db> {
                 .bootstrap_if_empty(true)
                 .build()
                 .await?;
+            // Pull latest from cloud on open
+            let _ = db.pull().await;
             Ok(Db::Sync(db))
         }
         _ => {
