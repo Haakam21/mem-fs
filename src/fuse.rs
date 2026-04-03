@@ -434,16 +434,21 @@ impl Filesystem for MemfsFs {
             // Build the tag set. At facet-level (e.g. /memories/people/),
             // auto-tag with facet:filename_stem so the file is properly
             // categorized (writing /memories/people/haakam.md tags with people:haakam).
+            // Skip auto-tagging for temp files (e.g. .tmp.12345) — they'll be
+            // renamed to the final name, which triggers proper tagging.
+            let is_temp = filename.contains(".tmp.");
             let mut tags = parsed.filters.clone();
             if let Some(ref facet) = parsed.trailing_facet {
-                let stem = std::path::Path::new(filename)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(filename);
-                tags.push(path::Filter {
-                    facet: facet.clone(),
-                    value: stem.to_string(),
-                });
+                if !is_temp {
+                    let stem = std::path::Path::new(filename)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(filename);
+                    tags.push(path::Filter {
+                        facet: facet.clone(),
+                        value: stem.to_string(),
+                    });
+                }
             }
 
             for f in &tags {
@@ -776,6 +781,18 @@ impl Filesystem for MemfsFs {
 
             if src_name != dst_name {
                 queries::rename_memory(conn, mem.id, dst_name).await?;
+
+                // At facet-level, update the auto-tag to match the new filename
+                // (e.g., renaming haakam.md.tmp.123 → haakam.md updates tag to people:haakam)
+                if let Some(ref facet) = dst_parsed.trailing_facet {
+                    let new_stem = std::path::Path::new(dst_name)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(dst_name);
+                    queries::create_facet(conn, facet).await?;
+                    queries::ensure_value(conn, facet, new_stem).await?;
+                    queries::add_tag(conn, mem.id, facet, new_stem).await?;
+                }
             }
 
             Ok::<_, anyhow::Error>(())
