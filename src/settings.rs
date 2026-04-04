@@ -70,7 +70,9 @@ fn extract_string(json: &str, key: &str) -> Option<String> {
     let value = find_value(json, key)?;
     let after_quote = value.strip_prefix('"')?;
     let end = after_quote.find('"')?;
-    Some(after_quote[..end].to_string())
+    // Strip internal whitespace (handles multi-line JSON values like long tokens)
+    let raw = &after_quote[..end];
+    Some(raw.chars().filter(|c| !c.is_whitespace()).collect())
 }
 
 #[cfg(feature = "search")]
@@ -112,6 +114,12 @@ mod tests {
         let json = r#"{"other": "val"}"#;
         assert!(extract_string(json, "turso_url").is_none());
         assert!(extract_number::<f32>(json, "search_threshold").is_none());
+    }
+
+    #[test]
+    fn multiline_string_value() {
+        let json = "{\n  \"turso_token\": \"eyJhb\n  GciOi\n  JFZ\"\n}";
+        assert_eq!(extract_string(json, "turso_token").unwrap(), "eyJhbGciOiJFZ");
     }
 
     #[test]
