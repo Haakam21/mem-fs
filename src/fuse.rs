@@ -322,7 +322,8 @@ impl Filesystem for MemfsFs {
             entries.push((child_ino, kind, name.clone()));
         }
 
-        for (i, (child_ino, kind, name)) in entries.iter().enumerate().skip(offset as usize) {
+        let skip = if offset >= 0 { offset as usize } else { 0 };
+        for (i, (child_ino, kind, name)) in entries.iter().enumerate().skip(skip) {
             if reply.add(*child_ino, (i + 1) as i64, *kind, name) {
                 break;
             }
@@ -397,7 +398,7 @@ impl Filesystem for MemfsFs {
 
         let cache = self.read_cache.read().unwrap();
         let data = &cache[&fh];
-        let start = offset as usize;
+        let start = if offset >= 0 { offset as usize } else { 0 };
         if start >= data.len() {
             reply.data(&[]);
         } else {
@@ -494,7 +495,7 @@ impl Filesystem for MemfsFs {
     ) {
         let mut buffers = self.write_buffers.write().unwrap();
         if let Some(buf) = buffers.get_mut(&fh) {
-            let off = offset as usize;
+            let off = if offset >= 0 { offset as usize } else { 0 };
             if off + data.len() > buf.len() {
                 buf.resize(off + data.len(), 0);
             }
