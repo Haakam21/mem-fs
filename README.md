@@ -6,7 +6,10 @@ A memory layer for AI agents. Memories are tagged documents stored in a SQLite d
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Haakam21/mem-fs/main/install.sh | bash
+~/.memfs/memfs init
 ```
+
+The first command downloads the binaries. The second sets up everything interactively — prompts for optional Turso Cloud credentials, mounts the filesystem, and configures Claude Code.
 
 Requires macFUSE ([macfuse.io](https://macfuse.io)) on macOS or `apt install fuse3` on Linux.
 
@@ -87,10 +90,9 @@ Optional settings.json fields:
 ## Uninstall
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Haakam21/mem-fs/main/uninstall.sh | bash
+~/.memfs/memfs uninstall          # keeps database
+~/.memfs/memfs uninstall --purge  # deletes everything
 ```
-
-Add `--purge` to also delete the database and models.
 
 ## Development
 

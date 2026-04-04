@@ -123,6 +123,12 @@ enum Commands {
     Sync,
     /// Initialize MemFS: configure cloud sync, mount, and set up Claude Code
     Init,
+    /// Uninstall MemFS: unmount, remove binaries and config
+    Uninstall {
+        /// Also delete database and models
+        #[arg(long)]
+        purge: bool,
+    },
     /// Mount as FUSE filesystem
     Mount {
         /// Mount point path
@@ -299,6 +305,50 @@ fn init() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn uninstall(purge: bool) -> anyhow::Result<()> {
+    let base = std::env::current_dir()?;
+    let mount_path = base.join("memories");
+    let memfs_dir = base.join(".memfs");
+
+    // Unmount
+    if mount_path.exists() {
+        eprintln!("Unmounting...");
+        let _ = if cfg!(target_os = "macos") {
+            std::process::Command::new("umount").arg(&mount_path).status()
+        } else {
+            std::process::Command::new("fusermount").arg("-u").arg(&mount_path).status()
+        };
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let _ = std::fs::remove_dir(&mount_path);
+    }
+
+    // Remove binaries
+    let _ = std::fs::remove_file(home_dir().join(".memfs/memfs"));
+    let _ = std::fs::remove_file(home_dir().join(".local/bin/search"));
+    eprintln!("Removed binaries");
+
+    // Remove Claude Code config
+    let _ = std::fs::remove_file(base.join(".claude/settings.json"));
+    let _ = std::fs::remove_dir(base.join(".claude"));
+
+    if purge {
+        let _ = std::fs::remove_dir_all(&memfs_dir);
+        let _ = std::fs::remove_dir_all(home_dir().join(".memfs"));
+        eprintln!("Purged .memfs directory and models");
+    } else {
+        eprintln!("Data preserved at {} (use --purge to delete)", memfs_dir.display());
+    }
+
+    eprintln!("MemFS uninstalled.");
+    Ok(())
+}
+
+fn home_dir() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
+}
+
 /// Get the path to the current running binary.
 fn dirs_self() -> std::path::PathBuf {
     std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("memfs"))
@@ -311,6 +361,13 @@ fn main() {
     match cli.command {
         Commands::Init => {
             if let Err(e) = init() {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+            return;
+        }
+        Commands::Uninstall { purge } => {
+            if let Err(e) = uninstall(purge) {
                 eprintln!("{}", e);
                 std::process::exit(1);
             }
@@ -551,7 +608,9 @@ async fn run_command(command: Commands) {
             db.push().await;
             Ok(())
         }
-        Commands::Init | Commands::Mount { .. } | Commands::Unmount { .. } => unreachable!(),
+        Commands::Init | Commands::Uninstall { .. } | Commands::Mount { .. } | Commands::Unmount { .. } => {
+            unreachable!()
+        }
     };
 
     if let Err(e) = result {
