@@ -189,8 +189,6 @@ fn read_stdin() -> String {
 }
 
 fn init() -> anyhow::Result<()> {
-    use std::io::Write;
-
     let base = std::env::current_dir()?;
     let memfs_dir = base.join(".memfs");
     let mount_path = base.join("memories");
@@ -200,15 +198,13 @@ fn init() -> anyhow::Result<()> {
 
     // --- Cloud sync (optional) ---
     let settings_path = memfs_dir.join("settings.json");
-    print!("Turso URL (Enter to skip): ");
-    std::io::stdout().flush()?;
+    eprint!("Turso URL (Enter to skip): ");
     let mut turso_url = String::new();
     std::io::stdin().read_line(&mut turso_url)?;
     let turso_url = turso_url.trim().to_string();
 
     if !turso_url.is_empty() {
-        print!("Turso token: ");
-        std::io::stdout().flush()?;
+        eprint!("Turso token: ");
         let mut turso_token = String::new();
         std::io::stdin().read_line(&mut turso_token)?;
         let turso_token = turso_token.trim().to_string();
