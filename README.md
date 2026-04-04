@@ -1,143 +1,104 @@
 # MemFS — Virtual Faceted Memory Filesystem
 
-MemFS is a virtual filesystem that exposes a faceted, multi-dimensional memory store via standard bash commands. Memories are tagged documents that can be navigated from multiple angles — by person, date, topic, or any user-defined facet — in any order, always converging on the same result set.
+A memory layer for AI agents. Memories are tagged documents stored in a SQLite database, mounted as a real FUSE filesystem. Agents navigate, read, write, and search memories using standard Unix tools — no special commands needed.
 
-Designed as the memory layer for a personal AI agent.
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Haakam21/mem-fs/main/install.sh | bash
+```
+
+Requires macFUSE ([macfuse.io](https://macfuse.io)) on macOS or `apt install fuse3` on Linux.
 
 ## How It Works
 
-Memories live in a [Turso](https://github.com/tursodatabase/turso) database (SQLite-compatible). MemFS presents them as a navigable directory tree where paths are facet filters:
+Memories are organized by facets — dimensions like `people`, `dates`, `topics`. Paths are facet:value filter pairs:
 
 ```
 /memories/people/sister/dates/2025-03/
 ```
 
-This path filters to memories tagged `people:sister` AND `dates:2025-03`. The same memories are reachable via any ordering:
+This filters to memories tagged `people:sister` AND `dates:2025-03`. Path order doesn't matter:
 
 ```
 /memories/dates/2025-03/people/sister/    # same result set
 ```
 
-At each level, `ls` shows:
-- **Directories** — remaining facets and values that can further narrow results
-- **Files** — memories matching all current filters
+At each level, `ls` shows directories (remaining facets/values) and files (matching memories).
 
-## Quick Start
+## Usage
 
-### One-line setup
+After install, use standard tools on the `memories/` directory:
 
 ```bash
-git clone https://github.com/Haakam21/mem-fs.git && bash mem-fs/setup.sh
+ls memories/                              # list facet categories
+ls memories/people/sister/                # memories about sister
+cat memories/people/sister/birthday.md    # read a memory
+echo "content" > memories/people/sister/new.md  # create a memory
+mkdir memories/projects                   # create a new facet
+grep -r "birthday" memories/              # keyword search
+search "birthday celebration"             # semantic search (by meaning)
 ```
 
-This builds memfs, installs it to `~/.local/bin`, mounts at `./memories` inside the repo, and creates a `CLAUDE.md` next to it so Claude Code knows where your memories are.
+## Semantic Search
 
-### Prerequisites
-
-- Rust toolchain (`rustup`)
-- macFUSE (macOS): `brew install macfuse` — approve the kernel extension in System Settings > Privacy & Security
-- libfuse (Linux): `apt install libfuse-dev`
-- pkg-config: `brew install pkgconf` (macOS) or `apt install pkg-config` (Linux)
-
-### Manual setup
+A standalone `search` command finds memories by meaning, not just keywords:
 
 ```bash
-cargo build --release
-./target/release/memfs mount -f ./memories &
+search "birthday celebration"                    # all memories
+search "birthday celebration" ./memories/people  # scoped to a facet
+search -k 5 -t 0.4 "cooking recipes"            # top 5, threshold 0.4
 ```
 
-### Usage
+Uses a local embedding model (all-MiniLM-L6-v2, downloaded on first use). Embeddings generated automatically on write.
 
-**Mount as a real filesystem (recommended):**
+## Cloud Sync
 
-```bash
-memfs mount ./memories
+Sync memories across machines via [Turso Cloud](https://turso.tech). Create `.memfs/settings.json`:
+
+```json
+{
+  "turso_url": "libsql://your-db.turso.io",
+  "turso_token": "your-token"
+}
 ```
 
-Then use standard commands:
-
-```bash
-ls /memories
-# dates/  people/  topics/
-
-cd /memories/people/sister
-ls
-# dates/  topics/  memory_0042.md  surprise_plan.md
-
-cat memory_0042.md
-# --- tags: people:sister, dates:2025-03, topics:birthday ---
-# Had a wonderful birthday celebration for my sister in March.
-
-echo "New memory content" > /memories/people/alex/topics/work/meeting_notes.md
-
-grep -r "birthday" /memories
-# memory_0042.md:Had a wonderful birthday celebration for my sister in March.
-```
-
-**Direct CLI usage (no mount required):**
-
-```bash
-memfs mkdir -p /memories/people/sister/dates/2025-03
-memfs cd /memories/people/sister/dates/2025-03
-memfs write memory_0042.md "Birthday celebration for my sister."
-memfs ls
-memfs cat memory_0042.md
-memfs grep "birthday" /memories
-```
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `cd <path>` | Navigate the faceted tree |
-| `ls [path]` | List facets, values, and memories at current scope |
-| `pwd` | Print current virtual working directory |
-| `cat <file>` | Display memory content with tags |
-| `mkdir [-p] <path>` | Create facet categories or values |
-| `rm [-r] <target>` | Delete a memory or untag a facet value |
-| `mv <src> <dst>` | Retag a memory (move between facet values) |
-| `cp <src> <dst>` | Add an additional tag to a memory |
-| `write <file> [content]` | Create a new memory (reads stdin if no content) |
-| `append <file> [content]` | Append to an existing memory |
-| `grep <pattern> [path]` | Search memory content with regex |
-| `find [path] --name <pattern>` | Search by filename or metadata |
-| `mount <path>` | Mount as FUSE filesystem |
-
-## Core Concepts
-
-### Facets
-
-Facets are dimensions for organizing memories: `people`, `dates`, `topics`, `locations`, or any custom category. Each facet has values (e.g., `people/sister`, `dates/2025-03`). Facets are fully dynamic — create new ones with `mkdir`.
-
-### Tagging
-
-When a memory is created inside a faceted path, it inherits those facet:value pairs as tags. Navigate to `/memories/people/sister/topics/birthday` and create a file — it's automatically tagged `people:sister, topics:birthday`.
-
-### Navigation Invariant
-
-The path `/memories/A/1/B/2` and `/memories/B/2/A/1` always produce the same memories. Paths are unordered sets of facet:value filters.
+Writes push to cloud automatically. On mount, pulls latest from cloud. Run `memfs sync` for manual sync.
 
 ## Configuration
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MEMFS_MOUNT` | `/memories` | Virtual filesystem mount point |
-| `MEMFS_DB` | `~/.memfs.db` | Path to the Turso database file |
-| `MEMFS_STATE` | `~/.memfs_cwd` | Path to the virtual CWD state file |
-| `MEMFS_TURSO_URL` | — | Turso Cloud sync URL (optional) |
-| `MEMFS_TURSO_TOKEN` | — | Turso Cloud auth token (optional) |
+All data lives in `.memfs/`:
 
-## Database
+| File | Description |
+|------|-------------|
+| `.memfs/db` | SQLite database |
+| `.memfs/settings.json` | Cloud sync credentials + search config |
+| `.memfs/state` | Virtual CWD for CLI |
 
-MemFS uses [Turso](https://github.com/tursodatabase/turso) (SQLite-compatible, written in Rust) in embedded mode. Local-only by default. Set `MEMFS_TURSO_URL` and `MEMFS_TURSO_TOKEN` to enable cloud sync for backup and multi-device access.
+Optional settings.json fields:
+
+```json
+{
+  "search_threshold": 0.3,
+  "search_limit": 10
+}
+```
+
+## Uninstall
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Haakam21/mem-fs/main/uninstall.sh | bash
+```
+
+Add `--purge` to also delete the database and models.
 
 ## Development
 
 ```bash
-cargo test          # 32 unit tests
-make integration    # 31 integration tests
-cargo build         # debug build
-make build          # release build
+cargo test --no-default-features --bin memfs   # fast unit tests (no ONNX, ~5s)
+cargo test                                      # full tests including embeddings
+make integration                                # 37 integration tests
+PKG_CONFIG_PATH="/usr/local/lib/pkgconfig" cargo build --release  # release build
 ```
 
 ## License
