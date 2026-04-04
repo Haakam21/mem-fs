@@ -40,28 +40,23 @@ fn main() {
     };
 
     let db_path = memfs_dir.join("db");
-    if !db_path.exists() {
-        eprintln!("search: no database at {}", db_path.display());
-        std::process::exit(1);
-    }
 
     // Copy DB + WAL to a temp location to bypass the FUSE daemon's file lock.
     // This gives us a point-in-time snapshot of all committed data.
     let temp_dir = std::env::temp_dir().join(format!("memfs_search_{}", std::process::id()));
     std::fs::create_dir_all(&temp_dir).unwrap();
     let temp_db = temp_dir.join("db");
-    std::fs::copy(&db_path, &temp_db).unwrap_or_default();
-    let wal_src = db_path.with_extension("db-wal");
-    let wal_src2 = db_path.with_file_name("db-wal");
-    for wal in [&wal_src, &wal_src2] {
-        if wal.exists() {
-            let _ = std::fs::copy(wal, temp_dir.join("db-wal"));
-            break;
-        }
+    if std::fs::copy(&db_path, &temp_db).is_err() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        eprintln!("search: failed to copy database");
+        std::process::exit(1);
     }
-    let shm_src = db_path.with_file_name("db-shm");
-    if shm_src.exists() {
-        let _ = std::fs::copy(&shm_src, temp_dir.join("db-shm"));
+    // Copy WAL + SHM if they exist (needed to see uncommitted data)
+    for suffix in ["db-wal", "db-shm"] {
+        let src = db_path.with_file_name(suffix);
+        if src.exists() {
+            let _ = std::fs::copy(&src, temp_dir.join(suffix));
+        }
     }
 
     let conn = match rusqlite::Connection::open_with_flags(
