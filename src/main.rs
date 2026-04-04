@@ -255,7 +255,7 @@ fn init() -> anyhow::Result<()> {
     let pid = child.id();
     std::thread::sleep(std::time::Duration::from_secs(2));
 
-    if !mount_path.join(".").exists() || std::fs::read_dir(&mount_path).is_err() {
+    if std::fs::read_dir(&mount_path).is_err() {
         anyhow::bail!("Mount failed");
     }
     eprintln!("Mounted (PID {})", pid);
