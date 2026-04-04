@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::path::Path;
 use turso::Connection;
 
+use crate::settings::Settings;
 use crate::util;
 
 /// Database wrapper supporting both local-only and cloud sync modes.
@@ -34,51 +35,15 @@ impl Db {
     }
 }
 
-/// Read Turso credentials from .memfs/settings.json (next to the DB file).
-/// Returns (url, token) if both are present, otherwise (None, None).
-fn turso_config(db_path: &str) -> (Option<String>, Option<String>) {
-    let config_path = match Path::new(db_path).parent() {
-        Some(p) => p.join("settings.json"),
-        None => return (None, None),
-    };
-
-    let content = match std::fs::read_to_string(&config_path) {
-        Ok(c) => c,
-        Err(_) => return (None, None),
-    };
-
-    // Minimal JSON parsing — look for "turso_url" and "turso_token" string values
-    let url = extract_json_string(&content, "turso_url");
-    let token = extract_json_string(&content, "turso_token");
-    (url, token)
-}
-
-/// Extract a string value from a JSON object by key (simple, no full parser needed).
-fn extract_json_string(json: &str, key: &str) -> Option<String> {
-    let pattern = format!("\"{}\"", key);
-    let idx = json.find(&pattern)?;
-    let after_key = &json[idx + pattern.len()..];
-    // Skip whitespace and colon
-    let after_colon = after_key.trim_start().strip_prefix(':')?;
-    let after_colon = after_colon.trim_start();
-    // Extract quoted string value
-    let after_quote = after_colon.strip_prefix('"')?;
-    let end = after_quote.find('"')?;
-    Some(after_quote[..end].to_string())
-}
-
-/// Open (or create) a Turso database. Uses cloud sync if .memfs/settings.json
-/// contains turso_url and turso_token, otherwise local-only.
-pub async fn open(db_path: &str) -> Result<Db> {
+/// Open (or create) a Turso database using the provided settings.
+pub async fn open(db_path: &str, settings: &Settings) -> Result<Db> {
     let path = util::expand_tilde(db_path);
 
     if let Some(parent) = Path::new(&path).parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    let (turso_url, turso_token) = turso_config(&path);
-
-    match (turso_url, turso_token) {
+    match (&settings.turso_url, &settings.turso_token) {
         (Some(url), Some(token)) => {
             let db = turso::sync::Builder::new_remote(&path)
                 .with_remote_url(url)
@@ -86,7 +51,6 @@ pub async fn open(db_path: &str) -> Result<Db> {
                 .bootstrap_if_empty(true)
                 .build()
                 .await?;
-            // Pull latest from cloud on open
             let _ = db.pull().await;
             Ok(Db::Sync(db))
         }

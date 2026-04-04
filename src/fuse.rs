@@ -860,7 +860,8 @@ pub fn mount(
 ) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
 
-    let database = runtime.block_on(db::open(db_path))?;
+    let settings = crate::settings::load(db_path);
+    let database = runtime.block_on(db::open(db_path, &settings))?;
     let db = Arc::new(database);
     let conn = runtime.block_on(db.connect())?;
     runtime.block_on(db::migrate(&conn))?;

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use memfs::embeddings::Embedder;
 use memfs::queries::SearchResult;
+use memfs::settings;
 
 #[derive(Parser)]
 #[command(name = "search", about = "Search memories by meaning")]
@@ -14,13 +15,13 @@ struct Args {
     /// Path scope (narrow to a facet, e.g. ./memories/people/sister)
     path: Option<String>,
 
-    /// Minimum similarity threshold (0.0-1.0)
-    #[arg(short = 't', long, default_value = "0.3")]
-    threshold: f32,
+    /// Minimum similarity threshold (0.0-1.0, default from settings.json)
+    #[arg(short = 't', long)]
+    threshold: Option<f32>,
 
-    /// Maximum number of results
-    #[arg(short = 'k', long, default_value = "10")]
-    limit: usize,
+    /// Maximum number of results (default from settings.json)
+    #[arg(short = 'k', long)]
+    limit: Option<usize>,
 
     /// Show full content
     #[arg(short = 'v', long)]
@@ -40,6 +41,9 @@ fn main() {
     };
 
     let db_path = memfs_dir.join("db");
+    let settings = settings::load(db_path.to_str().unwrap_or(""));
+    let threshold = args.threshold.unwrap_or(settings.search_threshold);
+    let limit = args.limit.unwrap_or(settings.search_limit);
 
     // Copy DB + WAL to a temp location to bypass the FUSE daemon's file lock.
     // This gives us a point-in-time snapshot of all committed data.
@@ -105,7 +109,7 @@ fn main() {
         .filter_map(|(filename, content, emb_bytes)| {
             let emb = Embedder::deserialize_embedding(emb_bytes).ok()?;
             let score = Embedder::cosine_similarity(&query_embedding, &emb);
-            if score >= args.threshold {
+            if score >= threshold {
                 Some(SearchResult {
                     filename: filename.clone(),
                     score,
@@ -118,7 +122,7 @@ fn main() {
         .collect();
 
     results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-    results.truncate(args.limit);
+    results.truncate(limit);
 
     let output = memfs::format::format_search(&results, args.verbose);
     if !output.is_empty() {

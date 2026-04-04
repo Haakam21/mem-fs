@@ -5,6 +5,7 @@ mod format;
 mod fuse;
 mod path;
 mod queries;
+mod settings;
 mod state;
 mod util;
 
@@ -147,12 +148,12 @@ enum Commands {
         query: String,
         /// Path scope
         path: Option<String>,
-        /// Minimum similarity threshold (0.0-1.0)
-        #[arg(short = 't', long, default_value = "0.3")]
-        threshold: f32,
-        /// Maximum number of results
-        #[arg(short = 'k', long, default_value = "10")]
-        limit: usize,
+        /// Minimum similarity threshold (0.0-1.0, default from settings.json)
+        #[arg(short = 't', long)]
+        threshold: Option<f32>,
+        /// Maximum number of results (default from settings.json)
+        #[arg(short = 'k', long)]
+        limit: Option<usize>,
         /// Show full content
         #[arg(short = 'v', long)]
         verbose: bool,
@@ -215,7 +216,9 @@ fn main() {
 }
 
 async fn run_command(command: Commands) {
-    let database = match db::open(&db_path()).await {
+    let settings = settings::load(&db_path());
+
+    let database = match db::open(&db_path(), &settings).await {
         Ok(db) => db,
         Err(e) => {
             eprintln!("memfs: failed to open database: {}", e);
@@ -376,16 +379,20 @@ async fn run_command(command: Commands) {
             threshold,
             limit,
             verbose,
-        } => match eng.search(&query, path.as_deref(), threshold, limit).await {
-            Ok(results) => {
-                let output = format::format_search(&results, verbose);
-                if !output.is_empty() {
-                    println!("{}", output);
+        } => {
+            let threshold = threshold.unwrap_or(settings.search_threshold);
+            let limit = limit.unwrap_or(settings.search_limit);
+            match eng.search(&query, path.as_deref(), threshold, limit).await {
+                Ok(results) => {
+                    let output = format::format_search(&results, verbose);
+                    if !output.is_empty() {
+                        println!("{}", output);
+                    }
+                    Ok(())
                 }
-                Ok(())
+                Err(e) => Err(e),
             }
-            Err(e) => Err(e),
-        },
+        }
         Commands::Reindex { path } => match eng.reindex(path.as_deref()).await {
             Ok(count) => {
                 println!("Reindexed {} memories", count);

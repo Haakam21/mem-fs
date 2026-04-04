@@ -1,6 +1,7 @@
 pub mod embeddings;
 pub mod format;
 pub mod queries;
+pub mod settings;
 
 // Internal modules — used by main binary and lib internals, not by search binary
 pub(crate) mod db;
