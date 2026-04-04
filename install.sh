@@ -1,21 +1,16 @@
 #!/bin/bash
-# MemFS install — downloads the binary, mounts, and configures Claude Code.
+# MemFS install — downloads binaries, then runs `memfs init` for setup.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Haakam21/mem-fs/main/install.sh | bash
 #
-# Installs into current directory: .memfs/, memories/, CLAUDE.md
-#
 # Prerequisites:
 #   - macFUSE (macOS): https://macfuse.io
 #   - libfuse (Linux): apt install fuse3
-#   - gh CLI: https://cli.github.com (for downloading release binary)
+#   - gh CLI: https://cli.github.com
 
 set -euo pipefail
 
-INSTALL_BASE="${1:-$(pwd)}"
-MOUNT_PATH="$INSTALL_BASE/memories"
-MEMFS_DIR="$INSTALL_BASE/.memfs"
 BIN_DIR="$HOME/.memfs"
 REPO="Haakam21/mem-fs"
 
@@ -51,10 +46,6 @@ if ! command -v gh &>/dev/null; then
     exit 1
 fi
 
-# --- Create .memfs directory ---
-
-mkdir -p "$MEMFS_DIR"
-
 # --- Download binaries ---
 
 mkdir -p "$BIN_DIR"
@@ -63,85 +54,14 @@ gh release download --repo "$REPO" --pattern "$ARTIFACT" --dir "$BIN_DIR" --clob
 mv "$BIN_DIR/$ARTIFACT" "$BIN_DIR/memfs"
 chmod +x "$BIN_DIR/memfs"
 
-# Install search binary to PATH so agents can discover it
+# Install search binary to PATH
+mkdir -p "$HOME/.local/bin"
 SEARCH_ARTIFACT="search-${ARTIFACT#memfs-}"
 echo "Downloading search ($SEARCH_ARTIFACT)..."
 gh release download --repo "$REPO" --pattern "$SEARCH_ARTIFACT" --dir "$HOME/.local/bin" --clobber 2>/dev/null && \
     mv "$HOME/.local/bin/$SEARCH_ARTIFACT" "$HOME/.local/bin/search" && \
-    chmod +x "$HOME/.local/bin/search" && \
-    echo "Installed search to ~/.local/bin/search" || \
-    echo "Note: search binary not available in this release"
-
-# --- Mount ---
-
-if mount | grep -q "$MOUNT_PATH"; then
-    echo "Unmounting existing mount at $MOUNT_PATH..."
-    if [[ "$OS" == "Darwin" ]]; then
-        umount "$MOUNT_PATH" 2>/dev/null || true
-    else
-        fusermount -u "$MOUNT_PATH" 2>/dev/null || true
-    fi
-    sleep 1
-fi
-
-mkdir -p "$MOUNT_PATH"
-export MEMFS_DB="$MEMFS_DIR/db"
-echo "Mounting memfs at $MOUNT_PATH..."
-"$BIN_DIR/memfs" mount -f "$MOUNT_PATH" &
-MOUNT_PID=$!
-sleep 2
-
-if ! ls "$MOUNT_PATH" &>/dev/null; then
-    echo "Error: Mount failed"
-    kill $MOUNT_PID 2>/dev/null || true
-    exit 1
-fi
-
-echo "Mounted (PID $MOUNT_PID)"
-
-# --- Seed starter facets so agents see the pattern ---
-
-if [ -z "$(ls "$MOUNT_PATH" 2>/dev/null)" ]; then
-    mkdir -p "$MOUNT_PATH/people" "$MOUNT_PATH/topics" "$MOUNT_PATH/dates" "$MOUNT_PATH/projects"
-    echo "Seeded starter facets: people/, topics/, dates/, projects/"
-fi
-
-# --- Disable Claude Code's built-in auto-memory ---
-
-CLAUDE_SETTINGS_DIR="$INSTALL_BASE/.claude"
-CLAUDE_SETTINGS="$CLAUDE_SETTINGS_DIR/settings.json"
-mkdir -p "$CLAUDE_SETTINGS_DIR"
-if [[ ! -f "$CLAUDE_SETTINGS" ]]; then
-    echo '{"autoMemoryEnabled":false,"ignorePaths":[".memfs/db",".memfs/db-wal",".memfs/db-shm",".memfs/state"]}' > "$CLAUDE_SETTINGS"
-elif ! grep -q "autoMemoryEnabled" "$CLAUDE_SETTINGS" 2>/dev/null; then
-    sed -i '' 's/^{/{\"autoMemoryEnabled\":false,\"ignorePaths\":[\".memfs\/db\",\".memfs\/db-wal\",\".memfs\/db-shm\",\".memfs\/state\"],/' "$CLAUDE_SETTINGS"
-fi
-
-# --- Create CLAUDE.md ---
-
-CLAUDE_MD="$INSTALL_BASE/CLAUDE.md"
-MEMORIES_LINE="Your memories are in the ./memories directory. Check them for anything relevant before responding. Use \`search \"query\"\` to find memories by meaning. Save important things you learn to memory."
-
-if [[ ! -f "$CLAUDE_MD" ]]; then
-    echo "$MEMORIES_LINE" > "$CLAUDE_MD"
-elif ! grep -qF "$MEMORIES_LINE" "$CLAUDE_MD" 2>/dev/null; then
-    echo "" >> "$CLAUDE_MD"
-    echo "$MEMORIES_LINE" >> "$CLAUDE_MD"
-fi
+    chmod +x "$HOME/.local/bin/search" || true
 
 echo ""
-echo "=== MemFS is ready ==="
-echo "  Mount point:  $MOUNT_PATH"
-echo "  Data dir:     $MEMFS_DIR"
-echo "  Claude hint:  $CLAUDE_MD"
-echo ""
-echo "To enable cloud sync, create $MEMFS_DIR/settings.json (chmod 600):"
-echo '  {"turso_url": "libsql://your-db.turso.io", "turso_token": "your-token"}'
-
-# Secure existing settings if present
-if [[ -f "$MEMFS_DIR/settings.json" ]]; then
-    chmod 600 "$MEMFS_DIR/settings.json"
-fi
-echo ""
-echo "To unmount:     $BIN_DIR/memfs unmount $MOUNT_PATH"
-echo "To remount:     MEMFS_DB=$MEMFS_DIR/db $BIN_DIR/memfs mount -f $MOUNT_PATH &"
+echo "Binaries installed. Run:"
+echo "  $BIN_DIR/memfs init"

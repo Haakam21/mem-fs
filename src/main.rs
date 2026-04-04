@@ -121,6 +121,8 @@ enum Commands {
     },
     /// Sync memories with cloud
     Sync,
+    /// Initialize MemFS: configure cloud sync, mount, and set up Claude Code
+    Init,
     /// Mount as FUSE filesystem
     Mount {
         /// Mount point path
@@ -178,11 +180,142 @@ fn read_stdin() -> String {
     buf.trim_end().to_string()
 }
 
+fn init() -> anyhow::Result<()> {
+    use std::io::Write;
+
+    let base = std::env::current_dir()?;
+    let memfs_dir = base.join(".memfs");
+    let mount_path = base.join("memories");
+    let claude_dir = base.join(".claude");
+
+    std::fs::create_dir_all(&memfs_dir)?;
+
+    // --- Cloud sync (optional) ---
+    let settings_path = memfs_dir.join("settings.json");
+    print!("Turso URL (Enter to skip): ");
+    std::io::stdout().flush()?;
+    let mut turso_url = String::new();
+    std::io::stdin().read_line(&mut turso_url)?;
+    let turso_url = turso_url.trim().to_string();
+
+    if !turso_url.is_empty() {
+        print!("Turso token: ");
+        std::io::stdout().flush()?;
+        let mut turso_token = String::new();
+        std::io::stdin().read_line(&mut turso_token)?;
+        let turso_token = turso_token.trim().to_string();
+
+        if !turso_token.is_empty() {
+            let json = format!(
+                "{{\"turso_url\":\"{}\",\"turso_token\":\"{}\"}}",
+                turso_url, turso_token
+            );
+            std::fs::write(&settings_path, &json)?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&settings_path, std::fs::Permissions::from_mode(0o600))?;
+            }
+
+            eprintln!("Cloud sync configured.");
+        }
+    }
+
+    // --- Mount ---
+    let db_path = memfs_dir.join("db");
+    if mount_path.exists() {
+        // Try unmounting if already mounted
+        let _ = if cfg!(target_os = "macos") {
+            std::process::Command::new("umount").arg(&mount_path).status()
+        } else {
+            std::process::Command::new("fusermount").arg("-u").arg(&mount_path).status()
+        };
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    std::fs::create_dir_all(&mount_path)?;
+
+    let memfs_bin = dirs_self();
+    eprintln!("Mounting at {}...", mount_path.display());
+
+    let mut cmd = std::process::Command::new(&memfs_bin);
+    cmd.arg("mount").arg("-f").arg(&mount_path);
+    cmd.env("MEMFS_DB", &db_path);
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::inherit());
+    let child = cmd.spawn()?;
+    let pid = child.id();
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    if !mount_path.join(".").exists() || std::fs::read_dir(&mount_path).is_err() {
+        anyhow::bail!("Mount failed");
+    }
+    eprintln!("Mounted (PID {})", pid);
+
+    // --- Seed facets ---
+    let has_entries = std::fs::read_dir(&mount_path)
+        .map(|mut d| d.next().is_some())
+        .unwrap_or(false);
+    if !has_entries {
+        for facet in ["people", "topics", "dates", "projects"] {
+            let _ = std::fs::create_dir(mount_path.join(facet));
+        }
+        eprintln!("Seeded facets: people/, topics/, dates/, projects/");
+    }
+
+    // --- Claude Code settings ---
+    std::fs::create_dir_all(&claude_dir)?;
+    let claude_settings = claude_dir.join("settings.json");
+    if !claude_settings.exists() {
+        std::fs::write(
+            &claude_settings,
+            "{\"autoMemoryEnabled\":false,\"ignorePaths\":[\".memfs/db\",\".memfs/db-wal\",\".memfs/db-shm\",\".memfs/state\"]}",
+        )?;
+    }
+
+    // --- CLAUDE.md ---
+    let claude_md = base.join("CLAUDE.md");
+    let memories_line = "Your memories are in the ./memories directory. Check them for anything relevant before responding. Use `search \"query\"` to find memories by meaning. Save important things you learn to memory.";
+    if !claude_md.exists() {
+        std::fs::write(&claude_md, memories_line)?;
+    } else {
+        let content = std::fs::read_to_string(&claude_md)?;
+        if !content.contains(memories_line) {
+            std::fs::write(&claude_md, format!("{}\n{}", content, memories_line))?;
+        }
+    }
+
+    eprintln!();
+    eprintln!("=== MemFS is ready ===");
+    eprintln!("  Mount point: {}", mount_path.display());
+    eprintln!("  CLAUDE.md:   {}", claude_md.display());
+    if settings_path.exists() {
+        eprintln!("  Cloud sync:  enabled");
+    }
+    eprintln!();
+    eprintln!("To remount: MEMFS_DB={} {} mount -f {} &",
+        db_path.display(), memfs_bin.display(), mount_path.display());
+
+    Ok(())
+}
+
+/// Get the path to the current running binary.
+fn dirs_self() -> std::path::PathBuf {
+    std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("memfs"))
+}
+
 fn main() {
     let cli = Cli::parse();
 
-    // Mount/Unmount run outside tokio — they create their own runtime
+    // Init/Mount/Unmount run outside tokio — they manage their own runtime
     match cli.command {
+        Commands::Init => {
+            if let Err(e) = init() {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+            return;
+        }
         Commands::Mount {
             mountpoint,
             foreground,
@@ -418,7 +551,7 @@ async fn run_command(command: Commands) {
             db.push().await;
             Ok(())
         }
-        Commands::Mount { .. } | Commands::Unmount { .. } => unreachable!(),
+        Commands::Init | Commands::Mount { .. } | Commands::Unmount { .. } => unreachable!(),
     };
 
     if let Err(e) = result {
