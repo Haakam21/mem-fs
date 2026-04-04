@@ -25,7 +25,6 @@ pub struct Engine {
 pub struct LsEntry {
     pub name: String,
     pub is_dir: bool,
-    pub id: Option<i64>,
     pub updated_at: Option<String>,
     pub content_len: usize,
 }
@@ -117,7 +116,6 @@ impl Engine {
                 entries.push(LsEntry {
                     name: f,
                     is_dir: true,
-                    id: None,
                     updated_at: None,
                     content_len: 0,
                 });
@@ -130,7 +128,6 @@ impl Engine {
                 entries.push(LsEntry {
                     name: v,
                     is_dir: true,
-                    id: None,
                     updated_at: None,
                     content_len: 0,
                 });
@@ -142,7 +139,6 @@ impl Engine {
                 entries.push(LsEntry {
                     name: f,
                     is_dir: true,
-                    id: None,
                     updated_at: None,
                     content_len: 0,
                 });
@@ -153,7 +149,6 @@ impl Engine {
                 entries.push(LsEntry {
                     name: m.filename,
                     is_dir: false,
-                    id: Some(m.id),
                     updated_at: Some(m.updated_at),
                     content_len: m.content.len(),
                 });
@@ -176,7 +171,7 @@ impl Engine {
         let filters = self.current_filters()?;
         match queries::get_memory(&self.conn, filename, &filters).await? {
             Some(m) => Ok(m),
-            None => bail!("memfs: cat: {}: No such memory", filename),
+            None => bail!("memfs: cat: {}: no such memory", filename),
         }
     }
 
@@ -245,7 +240,7 @@ impl Engine {
                 self.push_async();
                 Ok(format!("Deleted '{}'", filename))
             }
-            None => bail!("memfs: rm: '{}': No such memory", filename),
+            None => bail!("memfs: rm: '{}': no such memory", filename),
         }
     }
 
@@ -265,7 +260,7 @@ impl Engine {
         // Find the memory
         let mem = queries::get_memory(&self.conn, filename, &src_parsed.filters)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("memfs: mv: '{}': No such memory", filename))?;
+            .ok_or_else(|| anyhow::anyhow!("memfs: mv: '{}': no such memory", filename))?;
 
         // Determine what changed between source and dest paths
         // Find the differing filter
@@ -307,7 +302,7 @@ impl Engine {
 
         let mem = queries::get_memory(&self.conn, filename, &src_parsed.filters)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("memfs: cp: '{}': No such memory", filename))?;
+            .ok_or_else(|| anyhow::anyhow!("memfs: cp: '{}': no such memory", filename))?;
 
         // Add all destination tags that aren't already present
         for filter in &dst_parsed.filters {

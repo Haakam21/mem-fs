@@ -16,8 +16,6 @@ pub struct ParsedPath {
     /// If the path ends at a facet category level (odd segment count after mount),
     /// this holds the trailing facet name. None if at root or a value level.
     pub trailing_facet: Option<String>,
-    /// The normalized absolute path string.
-    pub raw: String,
 }
 
 impl ParsedPath {
@@ -80,7 +78,6 @@ pub fn parse(absolute_path: &str, mount_point: &str) -> Result<ParsedPath> {
         return Ok(ParsedPath {
             filters: vec![],
             trailing_facet: None,
-            raw: mount_normalized,
         });
     }
 
@@ -108,7 +105,6 @@ pub fn parse(absolute_path: &str, mount_point: &str) -> Result<ParsedPath> {
     Ok(ParsedPath {
         filters,
         trailing_facet,
-        raw: normalized,
     })
 }
 

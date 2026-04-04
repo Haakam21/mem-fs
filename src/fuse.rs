@@ -897,7 +897,7 @@ pub fn mount(
         MountOption::RW,
     ];
 
-    let _ = foreground; // TODO: implement true daemonization
+    let _ = foreground; // Flag accepted for compatibility; caller backgrounds with &
     eprintln!(
         "memfs: mounting at {} (Ctrl+C or `memfs unmount {}` to stop)",
         fuse_mountpoint, fuse_mountpoint

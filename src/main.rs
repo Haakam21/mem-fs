@@ -391,6 +391,10 @@ async fn run_command(command: Commands) {
             limit,
             verbose,
         } => {
+            if query.trim().is_empty() {
+                eprintln!("memfs: search: query cannot be empty");
+                std::process::exit(1);
+            }
             let threshold = threshold.unwrap_or(settings.search_threshold);
             let limit = limit.unwrap_or(settings.search_limit);
             match eng.search(&query, path.as_deref(), threshold, limit).await {
