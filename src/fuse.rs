@@ -462,17 +462,6 @@ impl Filesystem for MemfsFs {
                 queries::ensure_value(conn, &f.facet, &f.value).await?;
             }
 
-            // If a memory with this filename already exists, add the new
-            // path's tags to it instead of creating a duplicate. This makes
-            // `cp /memories/A/1/note.md /memories/B/2/note.md` add tags
-            // rather than create a separate copy.
-            if let Some(existing) = queries::get_memory(conn, filename, &[]).await? {
-                for f in &tags {
-                    queries::add_tag(conn, existing.id, &f.facet, &f.value).await?;
-                }
-                return Ok(existing.id);
-            }
-
             queries::create_memory(conn, filename, "", &tags).await
         });
 

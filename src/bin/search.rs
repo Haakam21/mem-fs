@@ -83,6 +83,11 @@ fn main() {
         }
     };
 
+    if args.query.trim().is_empty() {
+        eprintln!("search: query cannot be empty");
+        std::process::exit(1);
+    }
+
     let query_embedding = match embedder.embed(&args.query) {
         Ok(e) => e,
         Err(e) => {
@@ -123,6 +128,10 @@ fn main() {
 
     results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     results.truncate(limit);
+
+    if results.is_empty() && rows.is_empty() {
+        eprintln!("search: no embeddings found. Write some memories first, or run `memfs reindex`.");
+    }
 
     let output = memfs::format::format_search(&results, args.verbose);
     if !output.is_empty() {
