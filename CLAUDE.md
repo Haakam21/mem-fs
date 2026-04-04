@@ -48,7 +48,7 @@ Segments after mount point consumed in pairs: `facet/value`.
 
 ## Database: Turso
 
-Uses `turso` crate v0.4 (`tursodatabase/turso`). **NOT** libsql (unmaintained). Local-only by default via `Builder::new_local()`. Cloud sync is a TODO.
+Uses `turso` crate v0.4 (`tursodatabase/turso`). **NOT** libsql (unmaintained). Local-only by default. Cloud sync via `.memfs/settings.json` with `turso_url` and `turso_token` — uses embedded replica with async push after writes and pull on mount.
 
 ### Schema
 

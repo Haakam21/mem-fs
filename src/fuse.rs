@@ -11,6 +11,7 @@ use fuser::{
 };
 
 use crate::db::Db;
+#[cfg(feature = "search")]
 use crate::embeddings::Embedder;
 use crate::path;
 use crate::{db, queries};
@@ -33,6 +34,7 @@ pub struct MemfsFs {
     write_buffers: RwLock<HashMap<u64, Vec<u8>>>,
     read_cache: RwLock<HashMap<u64, Vec<u8>>>,
     db: Arc<Db>,
+    #[cfg(feature = "search")]
     embedder: Option<Embedder>,
 
     uid: u32,
@@ -536,7 +538,7 @@ impl Filesystem for MemfsFs {
                     queries::update_memory_content(conn, id, &content).await
                 }) {
                     Ok(()) => {
-                        // Embed synchronously (fast, ~5-10ms)
+                        #[cfg(feature = "search")]
                         if !content.is_empty() {
                             if let Some(ref embedder) = self.embedder {
                                 if let Ok(emb) = embedder.embed(&content) {
@@ -823,13 +825,17 @@ impl Filesystem for MemfsFs {
             if src_name != dst_name {
                 queries::rename_memory(conn, mem.id, dst_name).await?;
 
-                // At facet-level, update the auto-tag to match the new filename
-                // (e.g., renaming haakam.md.tmp.123 → haakam.md updates tag to people:haakam)
+                // At facet-level, update the auto-tag: remove old stem, add new stem
                 if let Some(ref facet) = dst_parsed.trailing_facet {
+                    let old_stem = std::path::Path::new(src_name)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(src_name);
                     let new_stem = std::path::Path::new(dst_name)
                         .file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or(dst_name);
+                    queries::remove_tag(conn, mem.id, facet, old_stem).await?;
                     queries::create_facet(conn, facet).await?;
                     queries::ensure_value(conn, facet, new_stem).await?;
                     queries::add_tag(conn, mem.id, facet, new_stem).await?;
@@ -866,6 +872,7 @@ pub fn mount(
     let conn = runtime.block_on(db.connect())?;
     runtime.block_on(db::migrate(&conn))?;
 
+    #[cfg(feature = "search")]
     let embedder = Embedder::try_load().unwrap_or(None);
 
     let uid = unsafe { libc::getuid() };
@@ -887,6 +894,7 @@ pub fn mount(
         write_buffers: RwLock::new(HashMap::new()),
         read_cache: RwLock::new(HashMap::new()),
         db,
+        #[cfg(feature = "search")]
         embedder,
         uid,
         gid,

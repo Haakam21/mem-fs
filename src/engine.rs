@@ -4,6 +4,7 @@ use anyhow::{bail, Result};
 use turso::Connection;
 
 use crate::db::Db;
+#[cfg(feature = "search")]
 use crate::embeddings::Embedder;
 use crate::path::{self, Filter, ParsedPath};
 use crate::queries::{self, Memory};
@@ -15,6 +16,7 @@ pub struct Engine {
     pub db: Arc<Db>,
     pub state_path: String,
     pub mount_point: String,
+    #[cfg(feature = "search")]
     pub embedder: Option<Embedder>,
 }
 
@@ -34,13 +36,14 @@ impl Engine {
         db: Arc<Db>,
         state_path: String,
         mount_point: String,
-        embedder: Option<Embedder>,
+        #[cfg(feature = "search")] embedder: Option<Embedder>,
     ) -> Self {
         Self {
             conn,
             db,
             state_path,
             mount_point,
+            #[cfg(feature = "search")]
             embedder,
         }
     }
@@ -324,6 +327,7 @@ impl Engine {
             queries::ensure_value(&self.conn, &tag.facet, &tag.value).await?;
         }
         let id = queries::create_memory(&self.conn, filename, content, &tags).await?;
+        #[cfg(feature = "search")]
         self.embed_memory(id, content).await;
         self.push_async();
         Ok(())
@@ -333,6 +337,7 @@ impl Engine {
     pub async fn append(&self, filename: &str, content: &str) -> Result<()> {
         let filters = self.current_filters()?;
         queries::append_memory(&self.conn, filename, content, &filters).await?;
+        #[cfg(feature = "search")]
         if let Some(mem) = queries::get_memory(&self.conn, filename, &filters).await? {
             self.embed_memory(mem.id, &mem.content).await;
         }
@@ -347,6 +352,7 @@ impl Engine {
     }
 
     /// Generate and store embedding for a memory (non-fatal if model unavailable).
+    #[cfg(feature = "search")]
     async fn embed_memory(&self, id: i64, content: &str) {
         if content.is_empty() {
             return;
@@ -464,7 +470,7 @@ impl Engine {
                     }
                 }
             }
-            results.push(format!("{}/{}", self.mount_point, mem.filename));
+            results.push(format!("{}/{}", base_path, mem.filename));
         }
 
         Ok(results)
@@ -473,6 +479,7 @@ impl Engine {
     // --- Semantic search ---
 
     /// Search memories by semantic similarity.
+    #[cfg(feature = "search")]
     pub async fn search(
         &self,
         query: &str,
@@ -519,6 +526,7 @@ impl Engine {
     }
 
     /// Generate embeddings for all memories (or scoped subset).
+    #[cfg(feature = "search")]
     pub async fn reindex(&self, scope: Option<&str>) -> Result<usize> {
         let embedder = self
             .embedder

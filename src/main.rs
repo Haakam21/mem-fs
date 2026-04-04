@@ -1,4 +1,5 @@
 mod db;
+#[cfg(feature = "search")]
 mod embeddings;
 mod engine;
 mod format;
@@ -216,9 +217,10 @@ fn main() {
 }
 
 async fn run_command(command: Commands) {
-    let settings = settings::load(&db_path());
+    let db = db_path();
+    let settings = settings::load(&db);
 
-    let database = match db::open(&db_path(), &settings).await {
+    let database = match db::open(&db, &settings).await {
         Ok(db) => db,
         Err(e) => {
             eprintln!("memfs: failed to open database: {}", e);
@@ -238,6 +240,7 @@ async fn run_command(command: Commands) {
         std::process::exit(1);
     }
 
+    #[cfg(feature = "search")]
     let embedder = match &command {
         Commands::Search { .. } | Commands::Reindex { .. } => {
             match embeddings::Embedder::load_or_download() {
@@ -251,7 +254,14 @@ async fn run_command(command: Commands) {
         _ => embeddings::Embedder::try_load().unwrap_or(None),
     };
 
-    let eng = engine::Engine::new(conn, db.clone(), state_path(), mount_point(), embedder);
+    let eng = engine::Engine::new(
+        conn,
+        db.clone(),
+        state_path(),
+        mount_point(),
+        #[cfg(feature = "search")]
+        embedder,
+    );
 
     let result = match command {
         Commands::Cd { path } => {
@@ -373,6 +383,7 @@ async fn run_command(command: Commands) {
                 Err(e) => Err(e),
             }
         }
+        #[cfg(feature = "search")]
         Commands::Search {
             query,
             path,
@@ -393,6 +404,11 @@ async fn run_command(command: Commands) {
                 Err(e) => Err(e),
             }
         }
+        #[cfg(not(feature = "search"))]
+        Commands::Search { .. } | Commands::Reindex { .. } => {
+            Err(anyhow::anyhow!("memfs: built without search feature"))
+        }
+        #[cfg(feature = "search")]
         Commands::Reindex { path } => match eng.reindex(path.as_deref()).await {
             Ok(count) => {
                 println!("Reindexed {} memories", count);

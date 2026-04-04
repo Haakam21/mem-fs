@@ -135,8 +135,13 @@ echo "  Mount point:  $MOUNT_PATH"
 echo "  Data dir:     $MEMFS_DIR"
 echo "  Claude hint:  $CLAUDE_MD"
 echo ""
-echo "To enable cloud sync, create $MEMFS_DIR/settings.json:"
+echo "To enable cloud sync, create $MEMFS_DIR/settings.json (chmod 600):"
 echo '  {"turso_url": "libsql://your-db.turso.io", "turso_token": "your-token"}'
+
+# Secure existing settings if present
+if [[ -f "$MEMFS_DIR/settings.json" ]]; then
+    chmod 600 "$MEMFS_DIR/settings.json"
+fi
 echo ""
 echo "To unmount:     $BIN_DIR/memfs unmount $MOUNT_PATH"
 echo "To remount:     MEMFS_DB=$MEMFS_DIR/db $BIN_DIR/memfs mount -f $MOUNT_PATH &"

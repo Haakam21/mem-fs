@@ -1,6 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::util;
+
+const DEFAULT_SEARCH_THRESHOLD: f32 = 0.3;
+const DEFAULT_SEARCH_LIMIT: usize = 10;
 
 /// MemFS settings loaded from .memfs/settings.json.
 pub struct Settings {
@@ -15,8 +18,8 @@ impl Default for Settings {
         Self {
             turso_url: None,
             turso_token: None,
-            search_threshold: 0.3,
-            search_limit: 10,
+            search_threshold: DEFAULT_SEARCH_THRESHOLD,
+            search_limit: DEFAULT_SEARCH_LIMIT,
         }
     }
 }
@@ -35,55 +38,39 @@ pub fn load(db_path: &str) -> Settings {
         Err(_) => return Settings::default(),
     };
 
-    let defaults = Settings::default();
     Settings {
         turso_url: extract_string(&content, "turso_url"),
         turso_token: extract_string(&content, "turso_token"),
         search_threshold: extract_number(&content, "search_threshold")
-            .unwrap_or(defaults.search_threshold),
-        search_limit: extract_number::<f32>(&content, "search_limit")
-            .map(|n| n as usize)
-            .unwrap_or(defaults.search_limit),
+            .filter(|&t: &f32| (0.0..=1.0).contains(&t))
+            .unwrap_or(DEFAULT_SEARCH_THRESHOLD),
+        search_limit: extract_number::<usize>(&content, "search_limit")
+            .unwrap_or(DEFAULT_SEARCH_LIMIT),
     }
 }
 
-/// Find .memfs/settings.json by walking up from a directory.
-pub fn load_from_dir(start_dir: &Path) -> Settings {
-    let mut dir = start_dir.to_path_buf();
-    loop {
-        let candidate = dir.join(".memfs").join("settings.json");
-        if candidate.exists() {
-            let db_path = dir.join(".memfs").join("db");
-            return load(db_path.to_str().unwrap_or(""));
-        }
-        if !dir.pop() {
-            return Settings::default();
-        }
-    }
-}
-
-fn extract_string(json: &str, key: &str) -> Option<String> {
+/// Find the JSON value for a given key, returning the trimmed text after the colon.
+fn find_value<'a>(json: &'a str, key: &str) -> Option<&'a str> {
     let pattern = format!("\"{}\"", key);
     let idx = json.find(&pattern)?;
     let after_key = &json[idx + pattern.len()..];
     let after_colon = after_key.trim_start().strip_prefix(':')?;
-    let after_colon = after_colon.trim_start();
-    let after_quote = after_colon.strip_prefix('"')?;
+    Some(after_colon.trim_start())
+}
+
+fn extract_string(json: &str, key: &str) -> Option<String> {
+    let value = find_value(json, key)?;
+    let after_quote = value.strip_prefix('"')?;
     let end = after_quote.find('"')?;
     Some(after_quote[..end].to_string())
 }
 
 fn extract_number<T: std::str::FromStr>(json: &str, key: &str) -> Option<T> {
-    let pattern = format!("\"{}\"", key);
-    let idx = json.find(&pattern)?;
-    let after_key = &json[idx + pattern.len()..];
-    let after_colon = after_key.trim_start().strip_prefix(':')?;
-    let after_colon = after_colon.trim_start();
-    // Extract number (digits, dots, minus)
-    let end = after_colon
+    let value = find_value(json, key)?;
+    let end = value
         .find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')
-        .unwrap_or(after_colon.len());
-    after_colon[..end].parse().ok()
+        .unwrap_or(value.len());
+    value[..end].parse().ok()
 }
 
 #[cfg(test)]
@@ -108,7 +95,7 @@ mod tests {
     #[test]
     fn extract_number_int() {
         let json = r#"{"search_limit": 20}"#;
-        assert_eq!(extract_number::<f32>(json, "search_limit").unwrap(), 20.0);
+        assert_eq!(extract_number::<usize>(json, "search_limit").unwrap(), 20);
     }
 
     #[test]
@@ -124,5 +111,17 @@ mod tests {
         assert_eq!(settings.search_threshold, 0.3);
         assert_eq!(settings.search_limit, 10);
         assert!(settings.turso_url.is_none());
+    }
+
+    #[test]
+    fn invalid_threshold_uses_default() {
+        // > 1.0
+        let val = extract_number::<f32>(r#"{"search_threshold": 1.5}"#, "search_threshold")
+            .filter(|&t| (0.0..=1.0).contains(&t));
+        assert!(val.is_none());
+        // < 0.0
+        let val = extract_number::<f32>(r#"{"search_threshold": -0.1}"#, "search_threshold")
+            .filter(|&t| (0.0..=1.0).contains(&t));
+        assert!(val.is_none());
     }
 }

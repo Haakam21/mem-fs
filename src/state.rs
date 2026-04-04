@@ -30,21 +30,6 @@ pub fn write(state_path: &str, cwd: &str) -> Result<()> {
     Ok(())
 }
 
-/// Clear the state file (user exited the virtual FS).
-pub fn clear(state_path: &str) -> Result<()> {
-    let path = util::expand_tilde(state_path);
-    if Path::new(&path).exists() {
-        fs::write(&path, "")?;
-    }
-    Ok(())
-}
-
-/// Check if the user is currently inside the virtual filesystem.
-pub fn in_virtual_fs(state_path: &str) -> bool {
-    read(state_path).ok().flatten().is_some()
-}
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,37 +61,5 @@ mod tests {
         let result = read(&path).unwrap();
         assert_eq!(result.as_deref(), Some("/memories/people/sister"));
         std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn clear_then_read() {
-        let path = temp_state_path();
-        write(&path, "/memories/people/sister").unwrap();
-        clear(&path).unwrap();
-        assert!(read(&path).unwrap().is_none());
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn in_virtual_fs_when_set() {
-        let path = temp_state_path();
-        write(&path, "/memories/people").unwrap();
-        assert!(in_virtual_fs(&path));
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn not_in_virtual_fs_when_cleared() {
-        let path = temp_state_path();
-        write(&path, "/memories").unwrap();
-        clear(&path).unwrap();
-        assert!(!in_virtual_fs(&path));
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn not_in_virtual_fs_when_missing() {
-        let path = temp_state_path();
-        assert!(!in_virtual_fs(&path));
     }
 }

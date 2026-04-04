@@ -1,3 +1,4 @@
+#[cfg(feature = "search")]
 pub mod embeddings;
 pub mod format;
 pub mod queries;

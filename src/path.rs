@@ -50,10 +50,6 @@ impl ParsedPath {
         !self.filters.is_empty() && self.trailing_facet.is_none()
     }
 
-    /// Returns the set of facet names already filtered on.
-    pub fn filtered_facets(&self) -> HashSet<String> {
-        self.filters.iter().map(|f| f.facet.clone()).collect()
-    }
 }
 
 /// Parse an absolute virtual path into filters and an optional trailing facet.
@@ -175,13 +171,6 @@ pub fn resolve(input: &str, current_cwd: &str, mount_point: &str) -> Result<Stri
     }
 
     Ok(normalized)
-}
-
-/// Check if a path (absolute or resolved) is inside the virtual mount point.
-pub fn is_virtual(path: &str, mount_point: &str) -> bool {
-    let normalized = normalize(path);
-    let mount_normalized = normalize(mount_point);
-    normalized == mount_normalized || normalized.starts_with(&format!("{}/", mount_normalized))
 }
 
 /// Normalize a path: remove trailing slashes, collapse double slashes.
@@ -343,29 +332,6 @@ mod tests {
     #[test]
     fn resolve_no_cwd_fails() {
         assert!(resolve("sister", "", MOUNT).is_err());
-    }
-
-    // --- is_virtual tests ---
-
-    #[test]
-    fn is_virtual_root() {
-        assert!(is_virtual("/memories", MOUNT));
-    }
-
-    #[test]
-    fn is_virtual_nested() {
-        assert!(is_virtual("/memories/people/sister", MOUNT));
-    }
-
-    #[test]
-    fn is_virtual_outside() {
-        assert!(!is_virtual("/home/user", MOUNT));
-    }
-
-    #[test]
-    fn is_virtual_prefix_collision() {
-        // /memories-old should NOT match /memories
-        assert!(!is_virtual("/memories-old", MOUNT));
     }
 
     // --- normalize tests ---

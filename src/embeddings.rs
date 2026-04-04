@@ -232,7 +232,7 @@ mod tests {
 fn download_file(url: &str, dest: &Path, label: &str) -> Result<()> {
     eprintln!("Downloading {} from {}...", label, url);
     let status = std::process::Command::new("curl")
-        .args(["-fSL", "-o"])
+        .args(["-fSL", "--max-time", "300", "-o"])
         .arg(dest)
         .arg(url)
         .status()?;
