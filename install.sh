@@ -63,5 +63,7 @@ gh release download --repo "$REPO" --pattern "$SEARCH_ARTIFACT" --dir "$HOME/.lo
     chmod +x "$HOME/.local/bin/search" || true
 
 echo ""
-echo "Binaries installed. Run:"
-echo "  $BIN_DIR/memfs init"
+echo "Binaries installed. Now run:"
+echo ""
+echo "  ~/.memfs/memfs init"
+echo ""

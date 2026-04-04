@@ -249,6 +249,7 @@ fn init() -> anyhow::Result<()> {
     let mut cmd = std::process::Command::new(&memfs_bin);
     cmd.arg("mount").arg("-f").arg(&mount_path);
     cmd.env("MEMFS_DB", &db_path);
+    cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::null());
     cmd.stderr(std::process::Stdio::inherit());
     let child = cmd.spawn()?;
