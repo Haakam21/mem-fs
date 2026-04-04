@@ -123,6 +123,8 @@ enum Commands {
     Sync,
     /// Initialize MemFS: configure cloud sync, mount, and set up Claude Code
     Init,
+    /// Update MemFS to the latest release
+    Update,
     /// Uninstall MemFS: unmount, remove binaries and config
     Uninstall {
         /// Also delete database and models
@@ -305,6 +307,78 @@ fn init() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn update() -> anyhow::Result<()> {
+    let current = env!("CARGO_PKG_VERSION");
+    let repo = "Haakam21/mem-fs";
+
+    // Get latest release tag via gh CLI
+    let output = std::process::Command::new("gh")
+        .args(["release", "view", "--repo", repo, "--json", "tagName", "-q", ".tagName"])
+        .output()?;
+
+    if !output.status.success() {
+        anyhow::bail!("failed to check latest release (is gh CLI installed and authenticated?)");
+    }
+
+    let latest_tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let latest_version = latest_tag.trim_start_matches('v');
+
+    if latest_version == current {
+        eprintln!("Already up to date (v{})", current);
+        return Ok(());
+    }
+
+    eprintln!("Updating v{} → {}", current, latest_tag);
+
+    // Detect platform
+    let artifact = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "memfs-darwin-arm64",
+        ("macos", "x86_64") => "memfs-darwin-x86_64",
+        ("linux", "x86_64") => "memfs-linux-x86_64",
+        (os, arch) => anyhow::bail!("unsupported platform: {}-{}", os, arch),
+    };
+
+    let bin_dir = home_dir().join(".memfs");
+
+    // Download memfs binary
+    let status = std::process::Command::new("gh")
+        .args(["release", "download", "--repo", repo, "--pattern", artifact, "--dir"])
+        .arg(&bin_dir)
+        .arg("--clobber")
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("failed to download {}", artifact);
+    }
+    std::fs::rename(bin_dir.join(artifact), bin_dir.join("memfs"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(bin_dir.join("memfs"), std::fs::Permissions::from_mode(0o755))?;
+    }
+
+    // Download search binary
+    let search_artifact = format!("search-{}", artifact.trim_start_matches("memfs-"));
+    let search_dir = home_dir().join(".local/bin");
+    std::fs::create_dir_all(&search_dir)?;
+    let status = std::process::Command::new("gh")
+        .args(["release", "download", "--repo", repo, "--pattern", &search_artifact, "--dir"])
+        .arg(&search_dir)
+        .arg("--clobber")
+        .status()?;
+    if status.success() {
+        let _ = std::fs::rename(search_dir.join(&search_artifact), search_dir.join("search"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(search_dir.join("search"), std::fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    eprintln!("Updated to {}", latest_tag);
+    Ok(())
+}
+
 fn uninstall(purge: bool) -> anyhow::Result<()> {
     let base = std::env::current_dir()?;
     let mount_path = base.join("memories");
@@ -361,6 +435,13 @@ fn main() {
     match cli.command {
         Commands::Init => {
             if let Err(e) = init() {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+            return;
+        }
+        Commands::Update => {
+            if let Err(e) = update() {
                 eprintln!("{}", e);
                 std::process::exit(1);
             }
@@ -608,7 +689,7 @@ async fn run_command(command: Commands) {
             db.push().await;
             Ok(())
         }
-        Commands::Init | Commands::Uninstall { .. } | Commands::Mount { .. } | Commands::Unmount { .. } => {
+        Commands::Init | Commands::Update | Commands::Uninstall { .. } | Commands::Mount { .. } | Commands::Unmount { .. } => {
             unreachable!()
         }
     };
