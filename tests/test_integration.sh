@@ -4,8 +4,10 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 MEMFS="$SCRIPT_DIR/target/release/memfs"
-export MEMFS_DB="/tmp/memfs_integration_test.db"
-export MEMFS_STATE="/tmp/memfs_integration_test_cwd"
+TEST_DIR="/tmp/memfs_integration_test_dir"
+mkdir -p "$TEST_DIR/.memfs"
+export MEMFS_DB="$TEST_DIR/.memfs/db"
+export MEMFS_STATE="$TEST_DIR/.memfs/state"
 export MEMFS_BIN="$MEMFS"
 
 # Clean slate
@@ -259,13 +261,51 @@ fi
 
 echo
 
+# --- Test 16: standalone search binary with FUSE ---
+echo "Test 16: standalone search binary"
+SEARCH="$SCRIPT_DIR/target/release/search"
+if [[ -x "$SEARCH" ]] && $MEMFS reindex >/dev/null 2>&1; then
+    FUSE_MP="$TEST_DIR/memories"
+    rm -rf "$FUSE_MP"
+    mkdir -p "$FUSE_MP"
+
+    # Mount FUSE
+    $MEMFS mount -f "$FUSE_MP" &
+    FUSE_PID=$!
+    sleep 2
+
+    if ls "$FUSE_MP" &>/dev/null; then
+        # Search binary reads DB while FUSE is running
+        output=$(cd "$TEST_DIR" && $SEARCH "birthday celebration" 2>&1)
+        assert_contains "standalone search finds birthday" "birthday" "$output"
+
+        # Scoped search via standalone binary
+        output=$(cd "$TEST_DIR" && $SEARCH "birthday" ./memories/people/sister 2>&1)
+        assert_contains "standalone scoped search works" "birthday" "$output"
+
+        # Verify score is shown
+        output=$(cd "$TEST_DIR" && $SEARCH -t 0.0 "cake" 2>&1)
+        assert_contains "search shows score" "(" "$output"
+
+        umount "$FUSE_MP" 2>/dev/null || true
+    else
+        echo "  SKIP: FUSE mount failed"
+    fi
+    kill $FUSE_PID 2>/dev/null; wait $FUSE_PID 2>/dev/null
+    rm -rf "$FUSE_MP"
+else
+    echo "  SKIP: search binary or embedding model not available"
+fi
+
+echo
+
 # --- Summary ---
 echo "================================"
 echo "Results: $PASS passed, $FAIL failed"
 echo "================================"
 
 # Cleanup
-rm -f "$MEMFS_DB" "$MEMFS_STATE"
+rm -rf "$TEST_DIR" /tmp/memfs_search_integration_test
 
 if [[ $FAIL -gt 0 ]]; then
     exit 1

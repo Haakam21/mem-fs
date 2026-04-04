@@ -143,6 +143,48 @@ fn find_memfs_dir() -> Option<PathBuf> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_scope_single_filter() {
+        let result = parse_scope("./memories/people/sister").unwrap();
+        assert_eq!(result, vec![("people".to_string(), "sister".to_string())]);
+    }
+
+    #[test]
+    fn parse_scope_multiple_filters() {
+        let result = parse_scope("/memories/people/sister/topics/cooking").unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], ("people".to_string(), "sister".to_string()));
+        assert_eq!(result[1], ("topics".to_string(), "cooking".to_string()));
+    }
+
+    #[test]
+    fn parse_scope_just_memories() {
+        assert!(parse_scope("./memories").is_none());
+    }
+
+    #[test]
+    fn parse_scope_trailing_facet_ignored() {
+        // Odd segment after memories = facet-level, no complete filter
+        let result = parse_scope("./memories/people");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_scope_no_memories_in_path() {
+        assert!(parse_scope("/some/random/path").is_none());
+    }
+
+    #[test]
+    fn parse_scope_absolute_path() {
+        let result = parse_scope("/tmp/install/memories/dates/2025-03").unwrap();
+        assert_eq!(result, vec![("dates".to_string(), "2025-03".to_string())]);
+    }
+}
+
 /// Extract facet:value pairs from a scope path.
 /// e.g., "./memories/people/sister" → [("people", "sister")]
 fn parse_scope(path: &str) -> Option<Vec<(String, String)>> {
