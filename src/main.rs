@@ -51,9 +51,6 @@ enum Commands {
         /// Long format
         #[arg(short = 'l')]
         long: bool,
-        /// Show all (compatibility, ignored)
-        #[arg(short = 'a')]
-        all: bool,
     },
     /// Print current virtual working directory
     Pwd,
@@ -77,9 +74,6 @@ enum Commands {
         /// Recursive (untag facet value)
         #[arg(short = 'r')]
         recursive: bool,
-        /// Force (no confirmation)
-        #[arg(short = 'f')]
-        force: bool,
     },
     /// Retag a memory (move between facet values)
     Mv {
@@ -121,9 +115,6 @@ enum Commands {
         /// List filenames only
         #[arg(short = 'l')]
         files_only: bool,
-        /// Recursive (searches all in scope, default behavior)
-        #[arg(short = 'r')]
-        recursive: bool,
         /// Show line numbers
         #[arg(short = 'n')]
         line_numbers: bool,
@@ -269,7 +260,7 @@ async fn run_command(command: Commands) {
             let target = path.as_deref().unwrap_or(&mount);
             eng.cd(target).await
         }
-        Commands::Ls { path, long, .. } => {
+        Commands::Ls { path, long } => {
             match eng.ls(path.as_deref()).await {
                 Ok(entries) => {
                     let output = if long {
@@ -320,11 +311,7 @@ async fn run_command(command: Commands) {
             }
         }
         Commands::Mkdir { path, parents } => eng.mkdir(&path, parents).await,
-        Commands::Rm {
-            target,
-            recursive,
-            force: _,
-        } => match eng.rm(&target, recursive).await {
+        Commands::Rm { target, recursive } => match eng.rm(&target, recursive).await {
             Ok(msg) => {
                 println!("{}", msg);
                 Ok(())
@@ -347,7 +334,6 @@ async fn run_command(command: Commands) {
             ignore_case,
             files_only,
             line_numbers,
-            ..
         } => match eng.grep(&pattern, path.as_deref(), ignore_case).await {
             Ok(results) => {
                 let output = format::format_grep(&results, files_only, line_numbers);

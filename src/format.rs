@@ -1,5 +1,7 @@
 use crate::engine::LsEntry;
-use crate::queries::{GrepResult, Memory, SearchResult};
+use crate::queries::{GrepResult, Memory};
+#[cfg(feature = "search")]
+use crate::queries::SearchResult;
 
 /// Format `ls` output in short (columnar) mode.
 pub fn format_ls(entries: &[LsEntry]) -> String {
@@ -111,7 +113,7 @@ pub fn format_find(paths: &[String]) -> String {
     paths.join("\n")
 }
 
-/// Format semantic search results.
+#[cfg(feature = "search")]
 pub fn format_search(results: &[SearchResult], verbose: bool) -> String {
     if results.is_empty() {
         return String::new();

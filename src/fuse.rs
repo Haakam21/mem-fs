@@ -585,7 +585,9 @@ impl Filesystem for MemfsFs {
                 if rt
                     .block_on(async {
                         queries::update_memory_content(conn, id, "").await?;
-                        queries::delete_embedding(conn, id).await
+                        #[cfg(feature = "search")]
+                        queries::delete_embedding(conn, id).await?;
+                        Ok::<_, anyhow::Error>(())
                     })
                     .is_err()
                 {

@@ -20,3 +20,8 @@ rusqlite = { version = "0.31", features = ["bundled"], optional = true }
 tokenizers = { version = "0.21", optional = true }
 tokio = { version = "1", features = ["full"] }
 turso = { version = "0.4", features = ["sync"] }
+
+[[bin]]
+name = "search"
+path = "src/bin/search.rs"
+required-features = ["search"]

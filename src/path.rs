@@ -1,5 +1,4 @@
 use anyhow::{bail, Result};
-use std::collections::HashSet;
 
 /// A facet:value filter pair (e.g., people:sister, dates:2025-03).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -19,9 +18,9 @@ pub struct ParsedPath {
 }
 
 impl ParsedPath {
-    /// Returns true if this path and `other` represent the same filter set,
-    /// regardless of segment ordering. This enforces the navigation invariant.
+    #[cfg(test)]
     pub fn equivalent(&self, other: &ParsedPath) -> bool {
+        use std::collections::HashSet;
         if self.filters.len() != other.filters.len() {
             return false;
         }
@@ -43,7 +42,7 @@ impl ParsedPath {
         self.trailing_facet.is_some()
     }
 
-    /// Returns true if at a filter/value level (browsing memories + remaining facets).
+    #[cfg(test)]
     pub fn is_value_level(&self) -> bool {
         !self.filters.is_empty() && self.trailing_facet.is_none()
     }

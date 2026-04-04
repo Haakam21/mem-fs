@@ -291,7 +291,7 @@ pub async fn delete_memory(conn: &Connection, id: i64) -> Result<()> {
     Ok(())
 }
 
-/// Delete an embedding (e.g., when content is truncated).
+#[cfg(feature = "search")]
 pub async fn delete_embedding(conn: &Connection, memory_id: i64) -> Result<()> {
     conn.execute(
         "DELETE FROM embeddings WHERE memory_id = ?1",
@@ -301,7 +301,7 @@ pub async fn delete_embedding(conn: &Connection, memory_id: i64) -> Result<()> {
     Ok(())
 }
 
-/// Store or update an embedding for a memory.
+#[cfg(feature = "search")]
 pub async fn upsert_embedding(
     conn: &Connection,
     memory_id: i64,
@@ -316,7 +316,7 @@ pub async fn upsert_embedding(
     Ok(())
 }
 
-/// A search result with similarity score.
+#[cfg(feature = "search")]
 #[derive(Debug)]
 pub struct SearchResult {
     pub filename: String,
@@ -324,7 +324,7 @@ pub struct SearchResult {
     pub content: String,
 }
 
-/// Load memories and their embeddings, scoped by filters.
+#[cfg(feature = "search")]
 pub async fn list_memory_embeddings(
     conn: &Connection,
     filters: &[Filter],

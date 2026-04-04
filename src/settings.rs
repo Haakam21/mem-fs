@@ -2,14 +2,18 @@ use std::path::Path;
 
 use crate::util;
 
+#[cfg(feature = "search")]
 const DEFAULT_SEARCH_THRESHOLD: f32 = 0.3;
+#[cfg(feature = "search")]
 const DEFAULT_SEARCH_LIMIT: usize = 10;
 
 /// MemFS settings loaded from .memfs/settings.json.
 pub struct Settings {
     pub turso_url: Option<String>,
     pub turso_token: Option<String>,
+    #[cfg(feature = "search")]
     pub search_threshold: f32,
+    #[cfg(feature = "search")]
     pub search_limit: usize,
 }
 
@@ -18,7 +22,9 @@ impl Default for Settings {
         Self {
             turso_url: None,
             turso_token: None,
+            #[cfg(feature = "search")]
             search_threshold: DEFAULT_SEARCH_THRESHOLD,
+            #[cfg(feature = "search")]
             search_limit: DEFAULT_SEARCH_LIMIT,
         }
     }
@@ -41,9 +47,11 @@ pub fn load(db_path: &str) -> Settings {
     Settings {
         turso_url: extract_string(&content, "turso_url"),
         turso_token: extract_string(&content, "turso_token"),
+        #[cfg(feature = "search")]
         search_threshold: extract_number(&content, "search_threshold")
             .filter(|&t: &f32| (0.0..=1.0).contains(&t))
             .unwrap_or(DEFAULT_SEARCH_THRESHOLD),
+        #[cfg(feature = "search")]
         search_limit: extract_number::<usize>(&content, "search_limit")
             .unwrap_or(DEFAULT_SEARCH_LIMIT),
     }
@@ -65,6 +73,7 @@ fn extract_string(json: &str, key: &str) -> Option<String> {
     Some(after_quote[..end].to_string())
 }
 
+#[cfg(feature = "search")]
 fn extract_number<T: std::str::FromStr>(json: &str, key: &str) -> Option<T> {
     let value = find_value(json, key)?;
     let end = value

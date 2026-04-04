@@ -321,9 +321,9 @@ impl Engine {
             queries::create_facet(&self.conn, &tag.facet).await?;
             queries::ensure_value(&self.conn, &tag.facet, &tag.value).await?;
         }
-        let id = queries::create_memory(&self.conn, filename, content, &tags).await?;
+        let _id = queries::create_memory(&self.conn, filename, content, &tags).await?;
         #[cfg(feature = "search")]
-        self.embed_memory(id, content).await;
+        self.embed_memory(_id, content).await;
         self.push_async();
         Ok(())
     }
