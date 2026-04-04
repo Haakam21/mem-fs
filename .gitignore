@@ -2,3 +2,7 @@
 .memfs/
 .memfs.db*
 .env
+.DS_Store
+*.swp
+*.swo
+*~

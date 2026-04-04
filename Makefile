@@ -1,17 +1,23 @@
-.PHONY: build test integration install clean
+.PHONY: build test test-fast test-full integration lint clean
 
 build:
-	cargo build --release
+	PKG_CONFIG_PATH="/usr/local/lib/pkgconfig" cargo build --release
 
-test:
-	cargo test
+test: test-fast
 
-integration: build
+test-fast:
+	cargo test --no-default-features --bin memfs
+
+test-full:
+	PKG_CONFIG_PATH="/usr/local/lib/pkgconfig" cargo test
+
+integration:
+	@if [ ! -f target/release/memfs ]; then $(MAKE) build; fi
 	bash tests/test_integration.sh
 
-install: build
-	cp target/release/memfs /usr/local/bin/
-	@echo "Add 'source $(shell pwd)/memfs-init.sh' to your shell profile"
+lint:
+	cargo check --no-default-features
+	PKG_CONFIG_PATH="/usr/local/lib/pkgconfig" cargo check
 
 clean:
 	cargo clean
