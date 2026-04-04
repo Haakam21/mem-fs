@@ -112,9 +112,9 @@ CLAUDE_SETTINGS_DIR="$INSTALL_BASE/.claude"
 CLAUDE_SETTINGS="$CLAUDE_SETTINGS_DIR/settings.json"
 mkdir -p "$CLAUDE_SETTINGS_DIR"
 if [[ ! -f "$CLAUDE_SETTINGS" ]]; then
-    echo '{"autoMemoryEnabled":false}' > "$CLAUDE_SETTINGS"
+    echo '{"autoMemoryEnabled":false,"ignorePaths":[".memfs/db",".memfs/db-wal",".memfs/db-shm",".memfs/state"]}' > "$CLAUDE_SETTINGS"
 elif ! grep -q "autoMemoryEnabled" "$CLAUDE_SETTINGS" 2>/dev/null; then
-    sed -i '' 's/^{/{\"autoMemoryEnabled\":false,/' "$CLAUDE_SETTINGS"
+    sed -i '' 's/^{/{\"autoMemoryEnabled\":false,\"ignorePaths\":[\".memfs\/db\",\".memfs\/db-wal\",\".memfs\/db-shm\",\".memfs\/state\"],/' "$CLAUDE_SETTINGS"
 fi
 
 # --- Create CLAUDE.md ---
