@@ -87,6 +87,14 @@ Optional settings.json fields:
 }
 ```
 
+## Update
+
+```bash
+~/.memfs/memfs update
+```
+
+Checks for new releases on GitHub and updates both binaries in place.
+
 ## Uninstall
 
 ```bash

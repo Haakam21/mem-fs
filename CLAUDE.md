@@ -113,7 +113,7 @@ All fields optional. Defaults: local-only DB, threshold 0.3, limit 10.
 
 ## Commands
 
-`memfs {cd, ls, pwd, cat, mkdir, rm, mv, cp, write, append, grep, find, search, reindex, sync, mount, unmount}`
+`memfs {cd, ls, pwd, cat, mkdir, rm, mv, cp, write, append, grep, find, search, reindex, sync, mount, unmount, init, update, uninstall}`
 
 - `write`/`append` accept content as arg or via stdin
 - `mkdir -p` creates facet categories AND ensures values exist (placeholder tags)
@@ -123,6 +123,9 @@ All fields optional. Defaults: local-only DB, threshold 0.3, limit 10.
 - `search "query"` semantic search with embeddings
 - `reindex` generates embeddings for all memories
 - `sync` pulls from cloud then pushes local changes
+- `init` interactive setup (cloud credentials, mount, Claude Code config)
+- `update` self-update to latest GitHub release
+- `uninstall [--purge]` remove binaries and config
 
 ## Semantic Search
 
@@ -174,9 +177,10 @@ When `.memfs/settings.json` has `turso_url` and `turso_token`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Haakam21/mem-fs/main/install.sh | bash
+~/.memfs/memfs init
 ```
 
-Installs `memfs` to `~/.memfs/memfs` (hidden from agents), `search` to `~/.local/bin/search` (on PATH). Creates `./memories/` FUSE mount, `.memfs/` data dir, `CLAUDE.md`, and `.claude/settings.json`.
+Install downloads binaries (`memfs` to `~/.memfs/`, `search` to `~/.local/bin/`). `init` interactively sets up cloud sync credentials, mounts the FUSE filesystem, seeds starter facets, and creates `CLAUDE.md` + `.claude/settings.json`. `memfs update` self-updates to the latest release.
 
 ## Testing
 
