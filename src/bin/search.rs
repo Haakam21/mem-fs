@@ -142,17 +142,14 @@ fn main() {
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
-/// Walk up from CWD looking for a directory containing ".memfs/".
+/// Find the .memfs data directory at ~/.memfs/
 fn find_memfs_dir() -> Option<PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        let candidate = dir.join(".memfs");
-        if candidate.is_dir() {
-            return Some(candidate);
-        }
-        if !dir.pop() {
-            return None;
-        }
+    let home = std::env::var("HOME").ok()?;
+    let dir = PathBuf::from(home).join(".memfs");
+    if dir.is_dir() {
+        Some(dir)
+    } else {
+        None
     }
 }
 

@@ -15,8 +15,8 @@ use std::env;
 use std::io::Read;
 
 const DEFAULT_MOUNT: &str = "/memories";
-const DEFAULT_STATE: &str = "./.memfs/state";
-const DEFAULT_DB: &str = "./.memfs/db";
+const DEFAULT_STATE: &str = "~/.memfs/state";
+const DEFAULT_DB: &str = "~/.memfs/db";
 
 fn mount_point() -> String {
     env::var("MEMFS_MOUNT").unwrap_or_else(|_| DEFAULT_MOUNT.to_string())
@@ -190,46 +190,52 @@ fn read_stdin() -> String {
 
 fn init() -> anyhow::Result<()> {
     let base = std::env::current_dir()?;
-    let memfs_dir = base.join(".memfs");
+    let data_dir = home_dir().join(".memfs");
     let mount_path = base.join("memories");
     let claude_dir = base.join(".claude");
 
-    std::fs::create_dir_all(&memfs_dir)?;
+    std::fs::create_dir_all(&data_dir)?;
 
     // --- Cloud sync (optional) ---
-    let settings_path = memfs_dir.join("settings.json");
-    eprint!("Turso URL (Enter to skip): ");
-    let mut turso_url = String::new();
-    std::io::stdin().read_line(&mut turso_url)?;
-    let turso_url = turso_url.trim().to_string();
+    let settings_path = data_dir.join("settings.json");
+    if !settings_path.exists() {
+        eprint!("Turso URL (Enter to skip): ");
+        let mut turso_url = String::new();
+        std::io::stdin().read_line(&mut turso_url)?;
+        let turso_url = turso_url.trim().to_string();
 
-    if !turso_url.is_empty() {
-        eprint!("Turso token: ");
-        let mut turso_token = String::new();
-        std::io::stdin().read_line(&mut turso_token)?;
-        let turso_token = turso_token.trim().to_string();
+        if !turso_url.is_empty() {
+            eprint!("Turso token: ");
+            let mut turso_token = String::new();
+            std::io::stdin().read_line(&mut turso_token)?;
+            let turso_token = turso_token.trim().to_string();
 
-        if !turso_token.is_empty() {
-            let json = format!(
-                "{{\"turso_url\":\"{}\",\"turso_token\":\"{}\"}}",
-                turso_url, turso_token
-            );
-            std::fs::write(&settings_path, &json)?;
+            if !turso_token.is_empty() {
+                let json = format!(
+                    "{{\"turso_url\":\"{}\",\"turso_token\":\"{}\"}}",
+                    turso_url, turso_token
+                );
+                std::fs::write(&settings_path, &json)?;
 
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&settings_path, std::fs::Permissions::from_mode(0o600))?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(
+                        &settings_path,
+                        std::fs::Permissions::from_mode(0o600),
+                    )?;
+                }
+
+                eprintln!("Cloud sync configured.");
             }
-
-            eprintln!("Cloud sync configured.");
         }
+    } else {
+        eprintln!("Using existing cloud config at {}", settings_path.display());
     }
 
     // --- Mount ---
-    let db_path = memfs_dir.join("db");
+    let db_path = data_dir.join("db");
     if mount_path.exists() {
-        // Try unmounting if already mounted
         let _ = if cfg!(target_os = "macos") {
             std::process::Command::new("umount").arg(&mount_path).status()
         } else {
@@ -272,10 +278,7 @@ fn init() -> anyhow::Result<()> {
     std::fs::create_dir_all(&claude_dir)?;
     let claude_settings = claude_dir.join("settings.json");
     if !claude_settings.exists() {
-        std::fs::write(
-            &claude_settings,
-            "{\"autoMemoryEnabled\":false,\"ignorePaths\":[\".memfs/db\",\".memfs/db-wal\",\".memfs/db-shm\",\".memfs/state\"]}",
-        )?;
+        std::fs::write(&claude_settings, "{\"autoMemoryEnabled\":false}")?;
     }
 
     // --- CLAUDE.md ---
@@ -293,13 +296,11 @@ fn init() -> anyhow::Result<()> {
     eprintln!();
     eprintln!("=== MemFS is ready ===");
     eprintln!("  Mount point: {}", mount_path.display());
+    eprintln!("  Data dir:    {}", data_dir.display());
     eprintln!("  CLAUDE.md:   {}", claude_md.display());
-    if settings_path.exists() {
-        eprintln!("  Cloud sync:  enabled");
-    }
     eprintln!();
-    eprintln!("To remount: MEMFS_DB={} {} mount -f {} &",
-        db_path.display(), memfs_bin.display(), mount_path.display());
+    eprintln!("To remount: MEMFS_DB={} memfs mount -f {} &",
+        db_path.display(), mount_path.display());
 
     Ok(())
 }
@@ -379,7 +380,7 @@ fn update() -> anyhow::Result<()> {
 fn uninstall(purge: bool) -> anyhow::Result<()> {
     let base = std::env::current_dir()?;
     let mount_path = base.join("memories");
-    let memfs_dir = base.join(".memfs");
+    let data_dir = home_dir().join(".memfs");
 
     // Unmount
     if mount_path.exists() {
@@ -403,11 +404,10 @@ fn uninstall(purge: bool) -> anyhow::Result<()> {
     let _ = std::fs::remove_dir(base.join(".claude"));
 
     if purge {
-        let _ = std::fs::remove_dir_all(&memfs_dir);
-        let _ = std::fs::remove_dir_all(home_dir().join(".memfs"));
-        eprintln!("Purged .memfs directory and models");
+        let _ = std::fs::remove_dir_all(&data_dir);
+        eprintln!("Purged ~/.memfs (database, models, config)");
     } else {
-        eprintln!("Data preserved at {} (use --purge to delete)", memfs_dir.display());
+        eprintln!("Data preserved at {} (use --purge to delete)", data_dir.display());
     }
 
     eprintln!("MemFS uninstalled.");

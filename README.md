@@ -57,7 +57,7 @@ Uses a local embedding model (all-MiniLM-L6-v2, downloaded on first use). Embedd
 
 ## Cloud Sync
 
-Sync memories across machines via [Turso Cloud](https://turso.tech). Create `.memfs/settings.json`:
+Sync memories across machines via [Turso Cloud](https://turso.tech). Run `memfs init` and enter your credentials, or create `~/.memfs/settings.json`:
 
 ```json
 {
@@ -70,13 +70,13 @@ Writes push to cloud automatically. On mount, pulls latest from cloud. Run `memf
 
 ## Configuration
 
-All data lives in `.memfs/`:
+All data lives in `~/.memfs/` (outside the project directory):
 
 | File | Description |
 |------|-------------|
-| `.memfs/db` | SQLite database |
-| `.memfs/settings.json` | Cloud sync credentials + search config |
-| `.memfs/state` | Virtual CWD for CLI |
+| `~/.memfs/db` | SQLite database |
+| `~/.memfs/settings.json` | Cloud sync credentials + search config |
+| `~/.memfs/state` | Virtual CWD for CLI |
 
 Optional settings.json fields:
 

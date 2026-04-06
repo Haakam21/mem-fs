@@ -31,7 +31,7 @@ src/
 ├── path.rs         # Path parsing, resolution, filter extraction
 ├── state.rs        # Virtual CWD state file read/write
 ├── db.rs           # Turso connection (local or sync), schema migrations, Db enum
-├── settings.rs     # Reads .memfs/settings.json (turso creds, search config)
+├── settings.rs     # Reads ~/.memfs/settings.json (turso creds, search config)
 ├── embeddings.rs   # ONNX model loading, tokenization, embedding, cosine similarity
 ├── format.rs       # Output formatting (ls columns, cat tags, grep lines, search results)
 ├── fuse.rs         # FUSE filesystem: implements fuser::Filesystem trait
@@ -60,7 +60,7 @@ Segments after mount point consumed in pairs: `facet/value`.
 
 ## Database
 
-Uses `turso` crate v0.4 with `sync` feature. Local-only by default. Cloud sync enabled via `.memfs/settings.json` with `turso_url` and `turso_token` — uses embedded replica with fire-and-forget async push after writes and pull on mount.
+Uses `turso` crate v0.4 with `sync` feature. Local-only by default. Cloud sync enabled via `~/.memfs/settings.json` with `turso_url` and `turso_token` — uses embedded replica with fire-and-forget async push after writes and pull on mount.
 
 ### Schema
 
@@ -80,13 +80,15 @@ Never use subqueries with compound SELECT in Turso — they fail at runtime.
 
 ## Config
 
-All per-install data lives in `.memfs/`:
+All data lives in `~/.memfs/` (outside the project directory, hidden from agents):
 
 ```
-.memfs/
+~/.memfs/
 ├── db              # SQLite database
 ├── state           # Virtual CWD for CLI
-└── settings.json   # Optional: cloud sync + search config
+├── settings.json   # Optional: cloud sync + search config
+├── memfs           # Binary
+└── models/         # ONNX embedding model
 ```
 
 ### settings.json
@@ -107,8 +109,8 @@ All fields optional. Defaults: local-only DB, threshold 0.3, limit 10.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MEMFS_MOUNT` | `/memories` | Virtual mount point |
-| `MEMFS_DB` | `./.memfs/db` | Database path |
-| `MEMFS_STATE` | `./.memfs/state` | CWD state path |
+| `MEMFS_DB` | `~/.memfs/db` | Database path |
+| `MEMFS_STATE` | `~/.memfs/state` | CWD state path |
 | `MEMFS_MODEL_PATH` | `~/.memfs/models` | ONNX model directory |
 
 ## Commands
@@ -166,7 +168,7 @@ Uses `all-MiniLM-L6-v2` (384-dim ONNX model, ~80MB). Model downloaded to `~/.mem
 
 ## Cloud Sync
 
-When `.memfs/settings.json` has `turso_url` and `turso_token`:
+When `~/.memfs/settings.json` has `turso_url` and `turso_token`:
 - `db::open()` uses `turso::sync::Builder` with `bootstrap_if_empty(true)`
 - On mount/open, pulls latest from cloud
 - After every mutation (CLI and FUSE), spawns async `push()` (fire-and-forget)
