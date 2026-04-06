@@ -270,10 +270,17 @@ fn init() -> anyhow::Result<()> {
     let pid = child.id();
     std::thread::sleep(std::time::Duration::from_secs(2));
 
-    if std::fs::read_dir(&mount_path).is_err() {
-        anyhow::bail!("Mount failed");
+    // Health check: verify the mount actually handles requests
+    let test_file = mount_path.join(".memfs_health_check");
+    match std::fs::write(&test_file, "ok") {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&test_file);
+            eprintln!("Mounted (PID {})", pid);
+        }
+        Err(e) => {
+            anyhow::bail!("Mount started but is not responding: {}", e);
+        }
     }
-    eprintln!("Mounted (PID {})", pid);
 
     // --- Seed facets ---
     let has_entries = std::fs::read_dir(&mount_path)
