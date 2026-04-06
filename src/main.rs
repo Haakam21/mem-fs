@@ -235,26 +235,7 @@ fn init() -> anyhow::Result<()> {
 
     // --- Mount (kill any existing mount first) ---
     let db_path = data_dir.join("db");
-
-    // Kill any existing memfs mount processes for this path
-    if let Ok(output) = std::process::Command::new("pgrep").args(["-f", &format!("memfs mount.*{}", mount_path.display())]).output() {
-        let pids = String::from_utf8_lossy(&output.stdout);
-        for pid in pids.lines() {
-            let _ = std::process::Command::new("kill").arg(pid.trim()).status();
-        }
-        if !pids.is_empty() {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-        }
-    }
-
-    if mount_path.exists() {
-        let _ = if cfg!(target_os = "macos") {
-            std::process::Command::new("umount").arg(&mount_path).status()
-        } else {
-            std::process::Command::new("fusermount").arg("-u").arg(&mount_path).status()
-        };
-        std::thread::sleep(std::time::Duration::from_secs(1));
-    }
+    stop_mount(&mount_path);
     std::fs::create_dir_all(&mount_path)?;
 
     let memfs_bin = dirs_self();
@@ -318,20 +299,7 @@ fn sync_cmd() -> anyhow::Result<()> {
     // Stop the FUSE daemon to release the DB lock
     let mount = std::env::current_dir()?.join("memories");
     eprintln!("Stopping FUSE daemon...");
-    if let Ok(output) = std::process::Command::new("pgrep")
-        .args(["-f", &format!("memfs mount.*{}", mount.display())])
-        .output()
-    {
-        for pid in String::from_utf8_lossy(&output.stdout).lines() {
-            let _ = std::process::Command::new("kill").arg(pid.trim()).status();
-        }
-    }
-    if cfg!(target_os = "macos") {
-        let _ = std::process::Command::new("umount").arg(&mount).status();
-    } else {
-        let _ = std::process::Command::new("fusermount").arg("-u").arg(&mount).status();
-    }
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    stop_mount(&mount);
 
     // Sync with cloud
     let rt = tokio::runtime::Runtime::new()?;
@@ -434,12 +402,7 @@ fn uninstall(purge: bool) -> anyhow::Result<()> {
     // Unmount
     if mount_path.exists() {
         eprintln!("Unmounting...");
-        let _ = if cfg!(target_os = "macos") {
-            std::process::Command::new("umount").arg(&mount_path).status()
-        } else {
-            std::process::Command::new("fusermount").arg("-u").arg(&mount_path).status()
-        };
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        stop_mount(&mount_path);
         let _ = std::fs::remove_dir(&mount_path);
     }
 
@@ -588,6 +551,24 @@ fn install_systemd(
 
     eprintln!("Installed systemd user service (auto-restarts on crash, starts on login)");
     Ok(())
+}
+
+/// Kill any existing memfs mount processes and unmount the given path.
+fn stop_mount(mount_path: &std::path::Path) {
+    if let Ok(output) = std::process::Command::new("pgrep")
+        .args(["-f", &format!("memfs mount.*{}", mount_path.display())])
+        .output()
+    {
+        for pid in String::from_utf8_lossy(&output.stdout).lines() {
+            let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+        }
+    }
+    if cfg!(target_os = "macos") {
+        let _ = std::process::Command::new("umount").arg(mount_path).status();
+    } else {
+        let _ = std::process::Command::new("fusermount").arg("-u").arg(mount_path).status();
+    }
+    std::thread::sleep(std::time::Duration::from_secs(1));
 }
 
 /// Get the path to the current running binary.
