@@ -176,13 +176,19 @@ impl Filesystem for MemfsFs {
         let rt = &self.runtime;
 
         if parsed.is_root() {
-            // At root: name must be a facet
-            match rt.block_on(async { queries::facet_exists(conn, name_str).await }) {
-                Ok(true) => {
-                    let child_path = format!("{}/{}", parent_path, name_str);
-                    let ino = self.alloc_dir_ino(&child_path);
-                    reply.entry(&TTL, &self.dir_attr(ino), 0);
-                }
+            // At root: check facet (directory) first, then memory file
+            if let Ok(true) =
+                rt.block_on(async { queries::facet_exists(conn, name_str).await })
+            {
+                let child_path = format!("{}/{}", parent_path, name_str);
+                let ino = self.alloc_dir_ino(&child_path);
+                reply.entry(&TTL, &self.dir_attr(ino), 0);
+                return;
+            }
+
+            // Check for untagged memory file at root
+            match rt.block_on(async { queries::get_memory(conn, name_str, &[]).await }) {
+                Ok(Some(m)) => reply.entry(&TTL, &self.memory_file_attr(&m), 0),
                 _ => reply.error(libc::ENOENT),
             }
         } else if parsed.is_facet_level() {
@@ -266,6 +272,10 @@ impl Filesystem for MemfsFs {
             if parsed.is_root() {
                 for f in queries::list_facets(conn).await? {
                     items.push((f, true, None));
+                }
+                // Also show untagged memories at root
+                for m in queries::list_memory_stubs(conn, &[]).await? {
+                    items.push((m.filename, false, Some(m.id)));
                 }
             } else if parsed.is_facet_level() {
                 let facet = parsed.trailing_facet.as_ref().unwrap();
