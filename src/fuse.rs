@@ -135,6 +135,18 @@ impl MemfsFs {
 }
 
 impl Filesystem for MemfsFs {
+    fn init(
+        &mut self,
+        _req: &Request,
+        _config: &mut fuser::KernelConfig,
+    ) -> std::result::Result<(), libc::c_int> {
+        // Pull from cloud after FUSE event loop starts (non-blocking).
+        // This avoids blocking mount startup on network I/O.
+        let db = self.db.clone();
+        self.runtime.spawn(async move { db.pull().await });
+        Ok(())
+    }
+
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
         if ino < FILE_INODE_BASE {
             if self.dir_path(ino).is_some() {

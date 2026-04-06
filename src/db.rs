@@ -51,7 +51,6 @@ pub async fn open(db_path: &str, settings: &Settings) -> Result<Db> {
                 .bootstrap_if_empty(true)
                 .build()
                 .await?;
-            let _ = db.pull().await;
             Ok(Db::Sync(db))
         }
         _ => {

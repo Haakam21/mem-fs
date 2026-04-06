@@ -499,6 +499,9 @@ async fn run_command(command: Commands) {
         std::process::exit(1);
     }
 
+    // Pull from cloud (non-blocking for sync mode, no-op for local)
+    let _ = db.pull().await;
+
     #[cfg(feature = "search")]
     let embedder = match &command {
         Commands::Search { .. } | Commands::Reindex { .. } => {
