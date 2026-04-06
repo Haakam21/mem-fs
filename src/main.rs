@@ -233,8 +233,20 @@ fn init() -> anyhow::Result<()> {
         eprintln!("Using existing cloud config at {}", settings_path.display());
     }
 
-    // --- Mount ---
+    // --- Mount (kill any existing mount first) ---
     let db_path = data_dir.join("db");
+
+    // Kill any existing memfs mount processes for this path
+    if let Ok(output) = std::process::Command::new("pgrep").args(["-f", &format!("memfs mount.*{}", mount_path.display())]).output() {
+        let pids = String::from_utf8_lossy(&output.stdout);
+        for pid in pids.lines() {
+            let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+        }
+        if !pids.is_empty() {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+
     if mount_path.exists() {
         let _ = if cfg!(target_os = "macos") {
             std::process::Command::new("umount").arg(&mount_path).status()
