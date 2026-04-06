@@ -411,17 +411,12 @@ fn update() -> anyhow::Result<()> {
 
 fn uninstall(purge: bool) -> anyhow::Result<()> {
     let base = std::env::current_dir()?;
-    let mount_path = base.join("memories");
+    let local_link = base.join("memories");
     let data_dir = home_dir().join(".memfs");
+    let global_mount = data_dir.join("mount");
 
-    // Unmount
-    if mount_path.exists() {
-        eprintln!("Unmounting...");
-        stop_mount(&mount_path);
-        let _ = std::fs::remove_dir(&mount_path);
-    }
-
-    // Remove service
+    // Stop service FIRST (prevents restart after unmount)
+    eprintln!("Stopping service...");
     if cfg!(target_os = "macos") {
         let plist = home_dir().join("Library/LaunchAgents/com.memfs.mount.plist");
         let _ = std::process::Command::new("launchctl").args(["unload", "-w"]).arg(&plist).status();
@@ -431,11 +426,18 @@ fn uninstall(purge: bool) -> anyhow::Result<()> {
         let _ = std::fs::remove_file(home_dir().join(".config/systemd/user/memfs.service"));
     }
 
+    // Unmount the global mount point
+    stop_mount(&global_mount);
+    let _ = std::fs::remove_dir(&global_mount);
+
+    // Remove local symlink
+    if local_link.read_link().is_ok() {
+        let _ = std::fs::remove_file(&local_link);
+    }
+
     // Remove binaries
-    let _ = std::fs::remove_file(home_dir().join(".memfs/memfs"));
     let _ = std::fs::remove_file(home_dir().join(".local/bin/search"));
-    let _ = std::fs::remove_file(home_dir().join(".local/bin/memfs-remount"));
-    eprintln!("Removed binaries and service");
+    eprintln!("Removed service and binaries.");
 
     // Remove Claude Code config
     let _ = std::fs::remove_file(base.join(".claude/settings.json"));
@@ -443,7 +445,7 @@ fn uninstall(purge: bool) -> anyhow::Result<()> {
 
     if purge {
         let _ = std::fs::remove_dir_all(&data_dir);
-        eprintln!("Purged ~/.memfs (database, models, config)");
+        eprintln!("Purged ~/.memfs (database, models, config, binary)");
     } else {
         eprintln!("Data preserved at {} (use --purge to delete)", data_dir.display());
     }
