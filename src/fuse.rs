@@ -803,6 +803,15 @@ impl Filesystem for MemfsFs {
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("not found"))?;
 
+            // If destination filename already exists, delete it (Unix rename replaces target)
+            if src_name != dst_name {
+                if let Ok(Some(existing)) = queries::get_memory(conn, dst_name, &dst_parsed.filters).await {
+                    if existing.id != mem.id {
+                        queries::delete_memory(conn, existing.id).await?;
+                    }
+                }
+            }
+
             // Compute tag diff
             let src_set: std::collections::HashSet<(String, String)> = src_parsed
                 .filters
