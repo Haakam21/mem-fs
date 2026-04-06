@@ -263,16 +263,10 @@ fn init() -> anyhow::Result<()> {
     install_service(&memfs_bin, &mount_path, &db_path)?;
     std::thread::sleep(std::time::Duration::from_secs(3));
 
-    // Health check: verify the mount actually handles requests
-    let test_file = mount_path.join(".memfs_health_check");
-    match std::fs::write(&test_file, "ok") {
-        Ok(()) => {
-            let _ = std::fs::remove_file(&test_file);
-            eprintln!("Mounted successfully.");
-        }
-        Err(e) => {
-            anyhow::bail!("Mount started but is not responding: {}", e);
-        }
+    // Health check: verify the mount responds to reads (no DB pollution)
+    match std::fs::read_dir(&mount_path) {
+        Ok(_) => eprintln!("Mounted successfully."),
+        Err(e) => anyhow::bail!("Mount started but is not responding: {}", e),
     }
 
     // --- Seed facets ---
