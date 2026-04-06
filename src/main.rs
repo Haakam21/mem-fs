@@ -191,12 +191,13 @@ fn read_stdin() -> String {
 fn init() -> anyhow::Result<()> {
     let base = std::env::current_dir()?;
     let data_dir = home_dir().join(".memfs");
-    let mount_path = base.join("memories");
+    let global_mount = data_dir.join("mount");
+    let local_link = base.join("memories");
     let claude_dir = base.join(".claude");
 
     std::fs::create_dir_all(&data_dir)?;
 
-    // --- Cloud sync (optional) ---
+    // --- Cloud sync (optional, only on first init) ---
     let settings_path = data_dir.join("settings.json");
     if !settings_path.exists() {
         eprint!("Turso URL (Enter to skip): ");
@@ -229,37 +230,49 @@ fn init() -> anyhow::Result<()> {
                 eprintln!("Cloud sync configured.");
             }
         }
-    } else {
-        eprintln!("Using existing cloud config at {}", settings_path.display());
     }
 
-    // --- Mount (kill any existing mount first) ---
+    // --- Mount daemon (shared, only start if not already running) ---
     let db_path = data_dir.join("db");
-    stop_mount(&mount_path);
-    std::fs::create_dir_all(&mount_path)?;
+    let already_mounted = std::fs::read_dir(&global_mount).is_ok();
 
-    let memfs_bin = dirs_self();
-    eprintln!("Mounting at {}...", mount_path.display());
+    if !already_mounted {
+        stop_mount(&global_mount);
+        std::fs::create_dir_all(&global_mount)?;
 
-    install_service(&memfs_bin, &mount_path, &db_path)?;
-    std::thread::sleep(std::time::Duration::from_secs(3));
+        let memfs_bin = dirs_self();
+        eprintln!("Starting FUSE daemon...");
 
-    // Health check: verify the mount responds to reads (no DB pollution)
-    match std::fs::read_dir(&mount_path) {
-        Ok(_) => eprintln!("Mounted successfully."),
-        Err(e) => anyhow::bail!("Mount started but is not responding: {}", e),
-    }
+        install_service(&memfs_bin, &global_mount, &db_path)?;
+        std::thread::sleep(std::time::Duration::from_secs(3));
 
-    // --- Seed facets ---
-    let has_entries = std::fs::read_dir(&mount_path)
-        .map(|mut d| d.next().is_some())
-        .unwrap_or(false);
-    if !has_entries {
-        for facet in ["people", "topics", "dates", "projects"] {
-            let _ = std::fs::create_dir(mount_path.join(facet));
+        match std::fs::read_dir(&global_mount) {
+            Ok(_) => eprintln!("Mounted at {}", global_mount.display()),
+            Err(e) => anyhow::bail!("Mount failed: {}", e),
         }
-        eprintln!("Seeded facets: people/, topics/, dates/, projects/");
+
+        // Seed facets on first mount
+        let has_entries = std::fs::read_dir(&global_mount)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false);
+        if !has_entries {
+            for facet in ["people", "topics", "dates", "projects"] {
+                let _ = std::fs::create_dir(global_mount.join(facet));
+            }
+            eprintln!("Seeded facets: people/, topics/, dates/, projects/");
+        }
+    } else {
+        eprintln!("FUSE daemon already running.");
     }
+
+    // --- Symlink ./memories → ~/.memfs/mount ---
+    if local_link.exists() || local_link.read_link().is_ok() {
+        let _ = std::fs::remove_file(&local_link);
+        let _ = std::fs::remove_dir(&local_link);
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&global_mount, &local_link)?;
+    eprintln!("Linked ./memories → {}", global_mount.display());
 
     // --- Claude Code settings ---
     std::fs::create_dir_all(&claude_dir)?;
@@ -282,12 +295,8 @@ fn init() -> anyhow::Result<()> {
 
     eprintln!();
     eprintln!("=== MemFS is ready ===");
-    eprintln!("  Mount point: {}", mount_path.display());
-    eprintln!("  Data dir:    {}", data_dir.display());
-    eprintln!("  CLAUDE.md:   {}", claude_md.display());
-    eprintln!();
-    eprintln!("To remount: MEMFS_DB={} memfs mount -f {} &",
-        db_path.display(), mount_path.display());
+    eprintln!("  Memories:  ./memories → {}", global_mount.display());
+    eprintln!("  CLAUDE.md: {}", claude_md.display());
 
     Ok(())
 }
@@ -297,7 +306,7 @@ fn sync_cmd() -> anyhow::Result<()> {
     let settings = settings::load(&db_p);
 
     // Stop the FUSE daemon to release the DB lock
-    let mount = std::env::current_dir()?.join("memories");
+    let mount = home_dir().join(".memfs/mount");
     eprintln!("Stopping FUSE daemon...");
     stop_mount(&mount);
 
