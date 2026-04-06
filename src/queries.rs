@@ -593,6 +593,45 @@ pub async fn list_memory_stubs_by_facet(
     }
 }
 
+/// Get an untagged memory by filename (for root-level lookup).
+pub async fn get_untagged_memory(conn: &Connection, filename: &str) -> Result<Option<Memory>> {
+    let mut rows = conn
+        .query(
+            "SELECT m.id, m.filename, m.content, m.created_at, m.updated_at \
+             FROM memories m LEFT JOIN tags t ON t.memory_id = m.id \
+             WHERE m.filename = ?1 AND t.id IS NULL LIMIT 1",
+            [filename],
+        )
+        .await?;
+    match rows.next().await? {
+        Some(row) => {
+            let m = row_to_memory(&row)?;
+            Ok(Some(m))
+        }
+        None => Ok(None),
+    }
+}
+
+/// List memories that have no tags (for root-level display).
+pub async fn list_untagged_memory_stubs(conn: &Connection) -> Result<Vec<MemoryStub>> {
+    let mut rows = conn
+        .query(
+            "SELECT m.id, m.filename FROM memories m \
+             LEFT JOIN tags t ON t.memory_id = m.id \
+             WHERE t.id IS NULL ORDER BY m.filename",
+            (),
+        )
+        .await?;
+    let mut mems = Vec::new();
+    while let Some(row) = rows.next().await? {
+        mems.push(MemoryStub {
+            id: row.get_value(0)?.as_integer().copied().unwrap_or(0),
+            filename: row.get_value(1)?.as_text().cloned().unwrap_or_default(),
+        });
+    }
+    Ok(mems)
+}
+
 /// Lightweight result for readdir — id + filename only, no content or tags.
 pub struct MemoryStub {
     pub id: i64,

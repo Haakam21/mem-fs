@@ -186,8 +186,7 @@ impl Filesystem for MemfsFs {
                 return;
             }
 
-            // Check for untagged memory file at root
-            match rt.block_on(async { queries::get_memory(conn, name_str, &[]).await }) {
+            match rt.block_on(async { queries::get_untagged_memory(conn, name_str).await }) {
                 Ok(Some(m)) => reply.entry(&TTL, &self.memory_file_attr(&m), 0),
                 _ => reply.error(libc::ENOENT),
             }
@@ -273,8 +272,7 @@ impl Filesystem for MemfsFs {
                 for f in queries::list_facets(conn).await? {
                     items.push((f, true, None));
                 }
-                // Also show untagged memories at root
-                for m in queries::list_memory_stubs(conn, &[]).await? {
+                for m in queries::list_untagged_memory_stubs(conn).await? {
                     items.push((m.filename, false, Some(m.id)));
                 }
             } else if parsed.is_facet_level() {
