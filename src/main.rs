@@ -293,6 +293,27 @@ fn init() -> anyhow::Result<()> {
         eprintln!("Seeded facets: people/, topics/, dates/, projects/");
     }
 
+    // --- Install remount script on PATH for agent recovery ---
+    let remount_script = home_dir().join(".local/bin/memfs-remount");
+    std::fs::create_dir_all(home_dir().join(".local/bin"))?;
+    std::fs::write(
+        &remount_script,
+        format!(
+            "#!/bin/bash\npkill -f 'memfs mount.*{}' 2>/dev/null; sleep 1\numount '{}' 2>/dev/null; sleep 1\nMEMFS_DB='{}' '{}' mount -f '{}' </dev/null >/dev/null 2>&1 &\nsleep 2\necho 'Remounted memories at {}'\n",
+            mount_path.display(),
+            mount_path.display(),
+            db_path.display(),
+            memfs_bin.display(),
+            mount_path.display(),
+            mount_path.display(),
+        ),
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&remount_script, std::fs::Permissions::from_mode(0o755))?;
+    }
+
     // --- Claude Code settings ---
     std::fs::create_dir_all(&claude_dir)?;
     let claude_settings = claude_dir.join("settings.json");
@@ -302,7 +323,7 @@ fn init() -> anyhow::Result<()> {
 
     // --- CLAUDE.md ---
     let claude_md = base.join("CLAUDE.md");
-    let memories_line = "Your memories are in the ./memories directory. Check them for anything relevant before responding. Use `search \"query\"` to find memories by meaning. Save important things you learn to memory.";
+    let memories_line = "Your memories are in the ./memories directory. Check them for anything relevant before responding. Use `search \"query\"` to find memories by meaning. Save important things you learn to memory. If the memories directory is not working, run `memfs-remount` to fix it.";
     if !claude_md.exists() {
         std::fs::write(&claude_md, memories_line)?;
     } else {
