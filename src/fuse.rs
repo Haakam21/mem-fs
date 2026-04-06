@@ -903,6 +903,13 @@ pub fn mount(
 
     std::fs::create_dir_all(fuse_mountpoint)?;
 
+    // Clean up any stale mount before mounting (handles crash recovery)
+    if cfg!(target_os = "macos") {
+        let _ = std::process::Command::new("umount").arg(fuse_mountpoint).status();
+    } else {
+        let _ = std::process::Command::new("fusermount").arg("-u").arg(fuse_mountpoint).status();
+    }
+
     let options = vec![
         MountOption::FSName("memfs".to_string()),
         MountOption::AutoUnmount,

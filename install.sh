@@ -62,6 +62,9 @@ gh release download --repo "$REPO" --pattern "$SEARCH_ARTIFACT" --dir "$HOME/.lo
     mv "$HOME/.local/bin/$SEARCH_ARTIFACT" "$HOME/.local/bin/search" && \
     chmod +x "$HOME/.local/bin/search" || true
 
+# Remove any stale memfs symlink from PATH (agent shouldn't find CLI)
+rm -f "$HOME/.local/bin/memfs" 2>/dev/null
+
 echo ""
 echo "Binaries installed. Now run:"
 echo ""
