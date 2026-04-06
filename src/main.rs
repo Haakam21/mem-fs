@@ -234,7 +234,13 @@ fn init() -> anyhow::Result<()> {
 
     // --- Mount daemon (shared, only start if not already running) ---
     let db_path = data_dir.join("db");
-    let already_mounted = std::fs::read_dir(&global_mount).is_ok();
+    // Check if mount is alive by trying to list it AND verifying a mount process exists
+    let already_mounted = std::fs::read_dir(&global_mount).is_ok()
+        && std::process::Command::new("pgrep")
+            .args(["-f", "memfs mount"])
+            .output()
+            .map(|o| !o.stdout.is_empty())
+            .unwrap_or(false);
 
     if !already_mounted {
         stop_mount(&global_mount);
