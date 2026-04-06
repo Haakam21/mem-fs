@@ -311,6 +311,49 @@ fn init() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn sync_cmd() -> anyhow::Result<()> {
+    let db_p = db_path();
+    let settings = settings::load(&db_p);
+
+    // Stop the FUSE daemon to release the DB lock
+    let mount = std::env::current_dir()?.join("memories");
+    eprintln!("Stopping FUSE daemon...");
+    if let Ok(output) = std::process::Command::new("pgrep")
+        .args(["-f", &format!("memfs mount.*{}", mount.display())])
+        .output()
+    {
+        for pid in String::from_utf8_lossy(&output.stdout).lines() {
+            let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+        }
+    }
+    if cfg!(target_os = "macos") {
+        let _ = std::process::Command::new("umount").arg(&mount).status();
+    } else {
+        let _ = std::process::Command::new("fusermount").arg("-u").arg(&mount).status();
+    }
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // Sync with cloud
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(db::sync(&db_p, &settings))?;
+
+    // Restart FUSE daemon via launchd/systemd (it will auto-restart)
+    // On macOS, just let launchd restart it
+    if cfg!(target_os = "macos") {
+        let plist = home_dir().join("Library/LaunchAgents/com.memfs.mount.plist");
+        if plist.exists() {
+            let _ = std::process::Command::new("launchctl").args(["unload", "-w"]).arg(&plist).status();
+            let _ = std::process::Command::new("launchctl").args(["load", "-w"]).arg(&plist).status();
+            eprintln!("FUSE daemon restarted.");
+        }
+    } else {
+        let _ = std::process::Command::new("systemctl").args(["--user", "restart", "memfs"]).status();
+        eprintln!("FUSE daemon restarted.");
+    }
+
+    Ok(())
+}
+
 fn update() -> anyhow::Result<()> {
     let current = env!("CARGO_PKG_VERSION");
     let repo = "Haakam21/mem-fs";
@@ -564,6 +607,13 @@ fn main() {
             }
             return;
         }
+        Commands::Sync => {
+            if let Err(e) = sync_cmd() {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+            return;
+        }
         Commands::Update => {
             if let Err(e) = update() {
                 eprintln!("{}", e);
@@ -603,18 +653,16 @@ fn main() {
 }
 
 async fn run_command(command: Commands) {
-    let db = db_path();
-    let settings = settings::load(&db);
+    let db_p = db_path();
 
-    let database = match db::open(&db, &settings).await {
+    let database = match db::open(&db_p).await {
         Ok(db) => db,
         Err(e) => {
             eprintln!("memfs: failed to open database: {}", e);
             std::process::exit(1);
         }
     };
-    let db = std::sync::Arc::new(database);
-    let conn = match db.connect().await {
+    let conn = match database.connect() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("memfs: failed to connect to database: {}", e);
@@ -626,8 +674,7 @@ async fn run_command(command: Commands) {
         std::process::exit(1);
     }
 
-    // Pull from cloud (non-blocking for sync mode, no-op for local)
-    let _ = db.pull().await;
+    let settings = settings::load(&db_p);
 
     #[cfg(feature = "search")]
     let embedder = match &command {
@@ -645,7 +692,6 @@ async fn run_command(command: Commands) {
 
     let eng = engine::Engine::new(
         conn,
-        db.clone(),
         state_path(),
         mount_point(),
         #[cfg(feature = "search")]
@@ -804,19 +850,7 @@ async fn run_command(command: Commands) {
             }
             Err(e) => Err(e),
         },
-        Commands::Sync => {
-            match db.pull().await {
-                Ok(true) => println!("Synced from cloud"),
-                Ok(false) => println!("Already up to date"),
-                Err(e) => {
-                    eprintln!("memfs: sync failed: {}", e);
-                    std::process::exit(1);
-                }
-            }
-            db.push().await;
-            Ok(())
-        }
-        Commands::Init | Commands::Update | Commands::Uninstall { .. } | Commands::Mount { .. } | Commands::Unmount { .. } => {
+        Commands::Sync | Commands::Init | Commands::Update | Commands::Uninstall { .. } | Commands::Mount { .. } | Commands::Unmount { .. } => {
             unreachable!()
         }
     };

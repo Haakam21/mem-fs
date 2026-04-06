@@ -5,59 +5,53 @@ use turso::Connection;
 use crate::settings::Settings;
 use crate::util;
 
-/// Database wrapper supporting both local-only and cloud sync modes.
-pub enum Db {
-    Local(turso::Database),
-    Sync(turso::sync::Database),
-}
-
-impl Db {
-    pub async fn connect(&self) -> Result<Connection> {
-        match self {
-            Db::Local(db) => Ok(db.connect()?),
-            Db::Sync(db) => Ok(db.connect().await?),
-        }
-    }
-
-    /// Push local changes to cloud. No-op for local-only mode.
-    pub async fn push(&self) {
-        if let Db::Sync(db) = self {
-            let _ = db.push().await;
-        }
-    }
-
-    /// Pull cloud changes to local. No-op for local-only mode.
-    pub async fn pull(&self) -> Result<bool> {
-        match self {
-            Db::Sync(db) => Ok(db.pull().await?),
-            Db::Local(_) => Ok(false),
-        }
-    }
-}
-
-/// Open (or create) a Turso database using the provided settings.
-pub async fn open(db_path: &str, settings: &Settings) -> Result<Db> {
+/// Open (or create) a local Turso database. Always local-only — cloud sync
+/// is handled separately by the `sync()` function to avoid runtime conflicts
+/// with the FUSE event loop.
+pub async fn open(db_path: &str) -> Result<turso::Database> {
     let path = util::expand_tilde(db_path);
 
     if let Some(parent) = Path::new(&path).parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    match (&settings.turso_url, &settings.turso_token) {
-        (Some(url), Some(token)) => {
-            let db = turso::sync::Builder::new_remote(&path)
-                .with_remote_url(url)
-                .with_auth_token(token)
-                .bootstrap_if_empty(true)
-                .build()
-                .await?;
-            Ok(Db::Sync(db))
-        }
+    let db = turso::Builder::new_local(&path).build().await?;
+    Ok(db)
+}
+
+/// Sync local database with Turso Cloud. Opens a temporary sync connection,
+/// pulls remote changes, pushes local changes, then closes. The FUSE daemon
+/// must NOT be running (it holds the DB lock).
+pub async fn sync(db_path: &str, settings: &Settings) -> Result<()> {
+    let path = util::expand_tilde(db_path);
+
+    let (url, token) = match (&settings.turso_url, &settings.turso_token) {
+        (Some(url), Some(token)) => (url.clone(), token.clone()),
         _ => {
-            let db = turso::Builder::new_local(&path).build().await?;
-            Ok(Db::Local(db))
+            eprintln!("No cloud credentials configured. Nothing to sync.");
+            return Ok(());
         }
+    };
+
+    eprintln!("Syncing with {}...", url);
+
+    let db = turso::sync::Builder::new_remote(&path)
+        .with_remote_url(&url)
+        .with_auth_token(&token)
+        .bootstrap_if_empty(true)
+        .build()
+        .await?;
+
+    let pulled = db.pull().await?;
+    db.push().await?;
+
+    if pulled {
+        eprintln!("Synced from cloud.");
+    } else {
+        eprintln!("Already up to date.");
     }
+
+    Ok(())
 }
 
 /// Run schema migrations — create tables and indexes if they don't exist.

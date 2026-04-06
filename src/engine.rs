@@ -1,9 +1,6 @@
-use std::sync::Arc;
-
 use anyhow::{bail, Result};
 use turso::Connection;
 
-use crate::db::Db;
 #[cfg(feature = "search")]
 use crate::embeddings::Embedder;
 use crate::path::{self, Filter, ParsedPath};
@@ -13,7 +10,6 @@ use crate::state;
 /// Core engine that ties together path parsing, state management, and database queries.
 pub struct Engine {
     pub conn: Connection,
-    pub db: Arc<Db>,
     pub state_path: String,
     pub mount_point: String,
     #[cfg(feature = "search")]
@@ -32,14 +28,12 @@ pub struct LsEntry {
 impl Engine {
     pub fn new(
         conn: Connection,
-        db: Arc<Db>,
         state_path: String,
         mount_point: String,
         #[cfg(feature = "search")] embedder: Option<Embedder>,
     ) -> Self {
         Self {
             conn,
-            db,
             state_path,
             mount_point,
             #[cfg(feature = "search")]
@@ -211,7 +205,6 @@ impl Engine {
             bail!("memfs: mkdir: cannot create '{}'", target);
         }
 
-        self.push_async();
         Ok(())
     }
 
@@ -224,7 +217,6 @@ impl Engine {
             if let Some(last) = parsed.filters.last() {
                 let count =
                     queries::untag_all(&self.conn, &last.facet, &last.value).await?;
-                self.push_async();
                 return Ok(format!(
                     "Removed tag {}:{} from {} memories",
                     last.facet, last.value, count
@@ -237,7 +229,6 @@ impl Engine {
         match queries::get_memory(&self.conn, filename, &parsed.filters).await? {
             Some(m) => {
                 queries::delete_memory(&self.conn, m.id).await?;
-                self.push_async();
                 Ok(format!("Deleted '{}'", filename))
             }
             None => bail!("memfs: rm: '{}': no such memory", filename),
@@ -284,7 +275,6 @@ impl Engine {
             queries::add_tag(&self.conn, mem.id, facet, value).await?;
         }
 
-        self.push_async();
         Ok(())
     }
 
@@ -309,7 +299,6 @@ impl Engine {
             queries::add_tag(&self.conn, mem.id, &filter.facet, &filter.value).await?;
         }
 
-        self.push_async();
         Ok(())
     }
 
@@ -324,7 +313,6 @@ impl Engine {
         let _id = queries::create_memory(&self.conn, filename, content, &tags).await?;
         #[cfg(feature = "search")]
         self.embed_memory(_id, content).await;
-        self.push_async();
         Ok(())
     }
 
@@ -336,14 +324,7 @@ impl Engine {
         if let Some(mem) = queries::get_memory(&self.conn, filename, &filters).await? {
             self.embed_memory(mem.id, &mem.content).await;
         }
-        self.push_async();
         Ok(())
-    }
-
-    /// Push changes to cloud in the background (non-blocking, non-fatal).
-    fn push_async(&self) {
-        let db = self.db.clone();
-        tokio::spawn(async move { db.push().await });
     }
 
     /// Generate and store embedding for a memory (non-fatal if model unavailable).
