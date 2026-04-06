@@ -260,22 +260,15 @@ fn init() -> anyhow::Result<()> {
     let memfs_bin = dirs_self();
     eprintln!("Mounting at {}...", mount_path.display());
 
-    let mut cmd = std::process::Command::new(&memfs_bin);
-    cmd.arg("mount").arg("-f").arg(&mount_path);
-    cmd.env("MEMFS_DB", &db_path);
-    cmd.stdin(std::process::Stdio::null());
-    cmd.stdout(std::process::Stdio::null());
-    cmd.stderr(std::process::Stdio::inherit());
-    let child = cmd.spawn()?;
-    let pid = child.id();
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    install_service(&memfs_bin, &mount_path, &db_path)?;
+    std::thread::sleep(std::time::Duration::from_secs(3));
 
     // Health check: verify the mount actually handles requests
     let test_file = mount_path.join(".memfs_health_check");
     match std::fs::write(&test_file, "ok") {
         Ok(()) => {
             let _ = std::fs::remove_file(&test_file);
-            eprintln!("Mounted (PID {})", pid);
+            eprintln!("Mounted successfully.");
         }
         Err(e) => {
             anyhow::bail!("Mount started but is not responding: {}", e);
@@ -293,27 +286,6 @@ fn init() -> anyhow::Result<()> {
         eprintln!("Seeded facets: people/, topics/, dates/, projects/");
     }
 
-    // --- Install remount script on PATH for agent recovery ---
-    let remount_script = home_dir().join(".local/bin/memfs-remount");
-    std::fs::create_dir_all(home_dir().join(".local/bin"))?;
-    std::fs::write(
-        &remount_script,
-        format!(
-            "#!/bin/bash\npkill -f 'memfs mount.*{}' 2>/dev/null; sleep 1\numount '{}' 2>/dev/null; sleep 1\nMEMFS_DB='{}' '{}' mount -f '{}' </dev/null >/dev/null 2>&1 &\nsleep 2\necho 'Remounted memories at {}'\n",
-            mount_path.display(),
-            mount_path.display(),
-            db_path.display(),
-            memfs_bin.display(),
-            mount_path.display(),
-            mount_path.display(),
-        ),
-    )?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&remount_script, std::fs::Permissions::from_mode(0o755))?;
-    }
-
     // --- Claude Code settings ---
     std::fs::create_dir_all(&claude_dir)?;
     let claude_settings = claude_dir.join("settings.json");
@@ -323,7 +295,7 @@ fn init() -> anyhow::Result<()> {
 
     // --- CLAUDE.md ---
     let claude_md = base.join("CLAUDE.md");
-    let memories_line = "Your memories are in the ./memories directory. Check them for anything relevant before responding. Use `search \"query\"` to find memories by meaning. Save important things you learn to memory. If the memories directory is not working, run `memfs-remount` to fix it.";
+    let memories_line = "Your memories are in the ./memories directory. Check them for anything relevant before responding. Use `search \"query\"` to find memories by meaning. Save important things you learn to memory.";
     if !claude_md.exists() {
         std::fs::write(&claude_md, memories_line)?;
     } else {
@@ -434,10 +406,21 @@ fn uninstall(purge: bool) -> anyhow::Result<()> {
         let _ = std::fs::remove_dir(&mount_path);
     }
 
+    // Remove service
+    if cfg!(target_os = "macos") {
+        let plist = home_dir().join("Library/LaunchAgents/com.memfs.mount.plist");
+        let _ = std::process::Command::new("launchctl").args(["unload", "-w"]).arg(&plist).status();
+        let _ = std::fs::remove_file(&plist);
+    } else {
+        let _ = std::process::Command::new("systemctl").args(["--user", "disable", "--now", "memfs"]).status();
+        let _ = std::fs::remove_file(home_dir().join(".config/systemd/user/memfs.service"));
+    }
+
     // Remove binaries
     let _ = std::fs::remove_file(home_dir().join(".memfs/memfs"));
     let _ = std::fs::remove_file(home_dir().join(".local/bin/search"));
-    eprintln!("Removed binaries");
+    let _ = std::fs::remove_file(home_dir().join(".local/bin/memfs-remount"));
+    eprintln!("Removed binaries and service");
 
     // Remove Claude Code config
     let _ = std::fs::remove_file(base.join(".claude/settings.json"));
@@ -458,6 +441,116 @@ fn home_dir() -> std::path::PathBuf {
     std::env::var("HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
+}
+
+fn install_service(
+    memfs_bin: &std::path::Path,
+    mount_path: &std::path::Path,
+    db_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    if cfg!(target_os = "macos") {
+        install_launchd(memfs_bin, mount_path, db_path)
+    } else {
+        install_systemd(memfs_bin, mount_path, db_path)
+    }
+}
+
+fn install_launchd(
+    memfs_bin: &std::path::Path,
+    mount_path: &std::path::Path,
+    db_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    let label = "com.memfs.mount";
+    let plist_dir = home_dir().join("Library/LaunchAgents");
+    std::fs::create_dir_all(&plist_dir)?;
+    let plist_path = plist_dir.join(format!("{}.plist", label));
+
+    // Unload existing service if present
+    let _ = std::process::Command::new("launchctl")
+        .args(["unload", "-w"])
+        .arg(&plist_path)
+        .status();
+
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{bin}</string>
+        <string>mount</string>
+        <string>-f</string>
+        <string>{mount}</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>MEMFS_DB</key>
+        <string>{db}</string>
+    </dict>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/memfs.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/memfs.err.log</string>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+</dict>
+</plist>
+"#,
+        label = label,
+        bin = memfs_bin.display(),
+        mount = mount_path.display(),
+        db = db_path.display(),
+    );
+
+    std::fs::write(&plist_path, plist)?;
+
+    let status = std::process::Command::new("launchctl")
+        .args(["load", "-w"])
+        .arg(&plist_path)
+        .status()?;
+
+    if !status.success() {
+        anyhow::bail!("Failed to load launchd service");
+    }
+
+    eprintln!("Installed launchd service (auto-restarts on crash, starts on login)");
+    Ok(())
+}
+
+fn install_systemd(
+    memfs_bin: &std::path::Path,
+    mount_path: &std::path::Path,
+    db_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    let unit_dir = home_dir().join(".config/systemd/user");
+    std::fs::create_dir_all(&unit_dir)?;
+    let unit_path = unit_dir.join("memfs.service");
+
+    let unit = format!(
+        "[Unit]\nDescription=MemFS FUSE mount\n\n[Service]\nExecStart={bin} mount -f {mount}\nEnvironment=MEMFS_DB={db}\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n",
+        bin = memfs_bin.display(),
+        mount = mount_path.display(),
+        db = db_path.display(),
+    );
+
+    std::fs::write(&unit_path, unit)?;
+
+    let _ = std::process::Command::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .status();
+    let _ = std::process::Command::new("systemctl")
+        .args(["--user", "enable", "--now", "memfs"])
+        .status();
+
+    eprintln!("Installed systemd user service (auto-restarts on crash, starts on login)");
+    Ok(())
 }
 
 /// Get the path to the current running binary.
