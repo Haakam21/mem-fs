@@ -135,14 +135,6 @@ impl MemfsFs {
 }
 
 impl Filesystem for MemfsFs {
-    fn init(
-        &mut self,
-        _req: &Request,
-        _config: &mut fuser::KernelConfig,
-    ) -> std::result::Result<(), libc::c_int> {
-        Ok(())
-    }
-
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
         if ino < FILE_INODE_BASE {
             if self.dir_path(ino).is_some() {
