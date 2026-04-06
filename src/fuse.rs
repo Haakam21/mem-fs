@@ -140,10 +140,6 @@ impl Filesystem for MemfsFs {
         _req: &Request,
         _config: &mut fuser::KernelConfig,
     ) -> std::result::Result<(), libc::c_int> {
-        // Pull from cloud after FUSE event loop starts (non-blocking).
-        // This avoids blocking mount startup on network I/O.
-        let db = self.db.clone();
-        self.runtime.spawn(async move { db.pull().await });
         Ok(())
     }
 
