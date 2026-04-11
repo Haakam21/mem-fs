@@ -35,23 +35,158 @@ pub async fn sync(db_path: &str, settings: &Settings) -> Result<()> {
 
     eprintln!("Syncing with {}...", url);
 
+    // The sync builder overwrites the local DB file when setting up an
+    // embedded replica. Copy local data to a temp file first so we can
+    // re-insert it through the sync connection (which tracks CDC).
+    let tmp_path = format!("{}-sync-backup", path);
+    std::fs::copy(&path, &tmp_path)?;
+    // Also copy WAL if it exists
+    let wal_path = format!("{}-wal", path);
+    let tmp_wal = format!("{}-wal", tmp_path);
+    if Path::new(&wal_path).exists() {
+        let _ = std::fs::copy(&wal_path, &tmp_wal);
+    }
+
+    eprintln!("  Reading local data...");
+    let local_data = {
+        let local_db = turso::Builder::new_local(&tmp_path).build().await?;
+        let c: Connection = local_db.connect()?;
+        read_all_data(&c).await?
+    };
+    let _ = std::fs::remove_file(&tmp_path);
+    let _ = std::fs::remove_file(&tmp_wal);
+    let _ = std::fs::remove_file(format!("{}-shm", tmp_path));
+
+    // Remove stale sync metadata so the sync builder starts fresh
+    for suffix in &["-info", "-changes", "-wal-revert"] {
+        let _ = std::fs::remove_file(format!("{}{}", path, suffix));
+    }
+
+    eprintln!("  Connecting...");
     let db = turso::sync::Builder::new_remote(&path)
         .with_remote_url(&url)
         .with_auth_token(&token)
-        .bootstrap_if_empty(true)
+        .bootstrap_if_empty(false)
         .build()
         .await?;
 
-    let pulled = db.pull().await?;
-    db.push().await?;
+    eprintln!("  Pulling...");
+    db.pull().await?;
 
-    if pulled {
-        eprintln!("Synced from cloud.");
-    } else {
-        eprintln!("Already up to date.");
+    // Create tables and re-insert all data through the sync connection
+    // so the CDC engine tracks every row for push.
+    let conn: Connection = db.connect().await?;
+    migrate(&conn).await?;
+
+    eprintln!("  Pushing {} memories...", local_data.memories.len());
+    for m in &local_data.memories {
+        conn.execute(
+            "INSERT OR REPLACE INTO memories (id, filename, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            turso::params![m.id, m.filename.as_str(), m.content.as_str(), m.created_at.as_str(), m.updated_at.as_str()],
+        ).await?;
+    }
+    for t in &local_data.tags {
+        conn.execute(
+            "INSERT OR REPLACE INTO tags (id, memory_id, facet, value) VALUES (?, ?, ?, ?)",
+            turso::params![t.id, t.memory_id, t.facet.as_str(), t.value.as_str()],
+        ).await?;
+    }
+    for f in &local_data.facets {
+        conn.execute(
+            "INSERT OR REPLACE INTO facets (name) VALUES (?)",
+            turso::params![f.as_str()],
+        ).await?;
+    }
+    for e in &local_data.embeddings {
+        conn.execute(
+            "INSERT OR REPLACE INTO embeddings (memory_id, embedding, model_version) VALUES (?, ?, ?)",
+            turso::params![e.memory_id, e.embedding.as_slice(), e.model_version.as_str()],
+        ).await?;
     }
 
+    db.push().await?;
+    eprintln!("Synced.");
+
     Ok(())
+}
+
+struct LocalData {
+    memories: Vec<MemoryRow>,
+    tags: Vec<TagRow>,
+    facets: Vec<String>,
+    embeddings: Vec<EmbeddingRow>,
+}
+
+struct MemoryRow {
+    id: i64,
+    filename: String,
+    content: String,
+    created_at: String,
+    updated_at: String,
+}
+
+struct TagRow {
+    id: i64,
+    memory_id: i64,
+    facet: String,
+    value: String,
+}
+
+struct EmbeddingRow {
+    memory_id: i64,
+    embedding: Vec<u8>,
+    model_version: String,
+}
+
+async fn read_all_data(conn: &Connection) -> Result<LocalData> {
+    let mut data = LocalData {
+        memories: Vec::new(),
+        tags: Vec::new(),
+        facets: Vec::new(),
+        embeddings: Vec::new(),
+    };
+
+    // Tables may not exist if DB was wiped by a previous sync attempt
+    if let Ok(mut rows) = conn.query("SELECT id, filename, content, created_at, updated_at FROM memories", ()).await {
+        while let Some(row) = rows.next().await? {
+            data.memories.push(MemoryRow {
+                id: row.get::<i64>(0)?,
+                filename: row.get::<String>(1)?,
+                content: row.get::<String>(2)?,
+                created_at: row.get::<String>(3)?,
+                updated_at: row.get::<String>(4)?,
+            });
+        }
+    }
+
+    if let Ok(mut rows) = conn.query("SELECT id, memory_id, facet, value FROM tags", ()).await {
+        while let Some(row) = rows.next().await? {
+            data.tags.push(TagRow {
+                id: row.get::<i64>(0)?,
+                memory_id: row.get::<i64>(1)?,
+                facet: row.get::<String>(2)?,
+                value: row.get::<String>(3)?,
+            });
+        }
+    }
+
+    if let Ok(mut rows) = conn.query("SELECT name FROM facets", ()).await {
+        while let Some(row) = rows.next().await? {
+            data.facets.push(row.get::<String>(0)?);
+        }
+    }
+
+    if let Ok(mut rows) = conn.query("SELECT memory_id, embedding, model_version FROM embeddings", ()).await {
+        while let Some(row) = rows.next().await? {
+            data.embeddings.push(EmbeddingRow {
+                memory_id: row.get::<i64>(0)?,
+                embedding: row.get::<Vec<u8>>(1)?,
+                model_version: row.get::<String>(2)?,
+            });
+        }
+    }
+
+    Ok(data)
 }
 
 /// Run schema migrations — create tables and indexes if they don't exist.
