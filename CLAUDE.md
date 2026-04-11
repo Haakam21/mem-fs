@@ -60,7 +60,7 @@ Segments after mount point consumed in pairs: `facet/value`.
 
 ## Database
 
-Uses `turso` crate v0.4 with `sync` feature. Local-only by default. Cloud sync enabled via `~/.memfs/settings.json` with `turso_url` and `turso_token` — uses embedded replica with fire-and-forget async push after writes and pull on mount.
+Uses `turso` crate v0.4 with `sync` feature. Local-only by default (`Builder::new_local`). Cloud sync enabled via `~/.memfs/settings.json` with `turso_url` and `turso_token` — sync is a separate explicit step via `memfs sync`.
 
 ### Schema
 
@@ -172,9 +172,13 @@ Uses `all-MiniLM-L6-v2` (384-dim ONNX model, ~80MB). Model downloaded to `~/.mem
 ## Cloud Sync
 
 FUSE always uses local-only DB (`Builder::new_local`). Cloud sync is a separate operation via `memfs sync` which:
-1. Stops the FUSE daemon (releases DB lock)
-2. Opens DB with sync builder (pull remote changes, push local changes)
-3. Restarts FUSE daemon via launchd/systemd
+1. Unloads launchd/systemd service (prevents auto-restart), then stops daemon and unmounts
+2. Reads all local data into memory via `new_local` connection
+3. Removes sync metadata files, opens `new_remote` sync connection, pulls remote changes
+4. Re-inserts all local data through the sync connection (in a transaction) so the CDC engine tracks it, then pushes
+5. Reloads launchd/systemd service
+
+The re-insert step is necessary because FUSE writes go through `new_local` which doesn't create CDC (Change Data Capture) entries. The sync builder also overwrites the local DB when setting up its embedded replica, so data must be read before the sync connection opens.
 
 Without credentials in `~/.memfs/settings.json`, everything works local-only.
 
