@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::path::Path;
 use turso::Connection;
 
+use crate::queries;
 use crate::settings::Settings;
 use crate::util;
 
@@ -35,27 +36,15 @@ pub async fn sync(db_path: &str, settings: &Settings) -> Result<()> {
 
     eprintln!("Syncing with {}...", url);
 
-    // The sync builder overwrites the local DB file when setting up an
-    // embedded replica. Copy local data to a temp file first so we can
-    // re-insert it through the sync connection (which tracks CDC).
-    let tmp_path = format!("{}-sync-backup", path);
-    std::fs::copy(&path, &tmp_path)?;
-    // Also copy WAL if it exists
-    let wal_path = format!("{}-wal", path);
-    let tmp_wal = format!("{}-wal", tmp_path);
-    if Path::new(&wal_path).exists() {
-        let _ = std::fs::copy(&wal_path, &tmp_wal);
-    }
-
+    // Read all local data into memory. The sync builder overwrites the DB
+    // when setting up an embedded replica, and FUSE writes (via new_local)
+    // don't create CDC entries, so we re-insert through the sync connection.
     eprintln!("  Reading local data...");
     let local_data = {
-        let local_db = turso::Builder::new_local(&tmp_path).build().await?;
+        let local_db = turso::Builder::new_local(&path).build().await?;
         let c: Connection = local_db.connect()?;
         read_all_data(&c).await?
     };
-    let _ = std::fs::remove_file(&tmp_path);
-    let _ = std::fs::remove_file(&tmp_wal);
-    let _ = std::fs::remove_file(format!("{}-shm", tmp_path));
 
     // Remove stale sync metadata so the sync builder starts fresh
     for suffix in &["-info", "-changes", "-wal-revert"] {
@@ -73,12 +62,13 @@ pub async fn sync(db_path: &str, settings: &Settings) -> Result<()> {
     eprintln!("  Pulling...");
     db.pull().await?;
 
-    // Create tables and re-insert all data through the sync connection
-    // so the CDC engine tracks every row for push.
+    // Re-insert all data through the sync connection so the CDC engine
+    // tracks every row for push.
     let conn: Connection = db.connect().await?;
     migrate(&conn).await?;
 
     eprintln!("  Pushing {} memories...", local_data.memories.len());
+    conn.execute("BEGIN", ()).await?;
     for m in &local_data.memories {
         conn.execute(
             "INSERT OR REPLACE INTO memories (id, filename, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
@@ -103,6 +93,7 @@ pub async fn sync(db_path: &str, settings: &Settings) -> Result<()> {
             turso::params![e.memory_id, e.embedding.as_slice(), e.model_version.as_str()],
         ).await?;
     }
+    conn.execute("COMMIT", ()).await?;
 
     db.push().await?;
     eprintln!("Synced.");
@@ -170,11 +161,7 @@ async fn read_all_data(conn: &Connection) -> Result<LocalData> {
         }
     }
 
-    if let Ok(mut rows) = conn.query("SELECT name FROM facets", ()).await {
-        while let Some(row) = rows.next().await? {
-            data.facets.push(row.get::<String>(0)?);
-        }
-    }
+    data.facets = queries::list_facets(conn).await.unwrap_or_default();
 
     if let Ok(mut rows) = conn.query("SELECT memory_id, embedding, model_version FROM embeddings", ()).await {
         while let Some(row) = rows.next().await? {
