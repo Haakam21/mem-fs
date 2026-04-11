@@ -42,11 +42,6 @@ impl ParsedPath {
         self.trailing_facet.is_some()
     }
 
-    #[cfg(test)]
-    pub fn is_value_level(&self) -> bool {
-        !self.filters.is_empty() && self.trailing_facet.is_none()
-    }
-
 }
 
 /// Parse an absolute virtual path into filters and an optional trailing facet.
@@ -215,7 +210,7 @@ mod tests {
         assert_eq!(p.filters[0].facet, "people");
         assert_eq!(p.filters[0].value, "sister");
         assert!(p.trailing_facet.is_none());
-        assert!(p.is_value_level());
+        assert!(!p.filters.is_empty() && p.trailing_facet.is_none());
     }
 
     #[test]

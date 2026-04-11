@@ -153,7 +153,7 @@ impl Filesystem for MemfsFs {
                 reply.error(libc::EINVAL);
                 return;
             }
-            Some(n) if n.starts_with("._") => {
+            Some(n) if n.starts_with("._") || n.starts_with(".#") => {
                 reply.error(libc::ENOENT);
                 return;
             }
@@ -317,7 +317,7 @@ impl Filesystem for MemfsFs {
             (ino, FileType::Directory, "..".to_string()),
         ];
 
-        for (name, is_dir, mem_id) in items.iter().filter(|(n, _, _)| !n.is_empty() && !n.starts_with("._")) {
+        for (name, is_dir, mem_id) in items.iter().filter(|(n, _, _)| !n.is_empty() && !n.starts_with("._") && !n.starts_with(".#")) {
             let child_ino = if *is_dir {
                 let child_path = format!("{}/{}", path, name);
                 self.alloc_dir_ino(&child_path)
@@ -451,9 +451,12 @@ impl Filesystem for MemfsFs {
             // Build the tag set. At facet-level (e.g. /memories/people/),
             // auto-tag with facet:filename_stem so the file is properly
             // categorized (writing /memories/people/haakam.md tags with people:haakam).
-            // Skip auto-tagging for temp files (e.g. .tmp.12345) — they'll be
-            // renamed to the final name, which triggers proper tagging.
-            let is_temp = filename.contains(".tmp.") || filename.starts_with("._");
+            // Skip auto-tagging for temp/editor files — they'll be renamed
+            // to the final name, which triggers proper tagging.
+            let is_temp = filename.contains(".tmp.")
+                || filename.starts_with("._")
+                || filename.starts_with(".#")
+                || filename.ends_with('~');
             let mut tags = parsed.filters.clone();
             if let Some(ref facet) = parsed.trailing_facet {
                 if !is_temp {

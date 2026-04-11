@@ -334,15 +334,16 @@ impl Engine {
             return;
         }
         if let Some(ref embedder) = self.embedder {
-            if let Ok(embedding) = embedder.embed(content) {
-                let bytes = Embedder::serialize_embedding(&embedding);
-                let _ = queries::upsert_embedding(
-                    &self.conn,
-                    id,
-                    &bytes,
-                    embedder.model_version(),
-                )
-                .await;
+            match embedder.embed(content) {
+                Ok(embedding) => {
+                    let bytes = Embedder::serialize_embedding(&embedding);
+                    if let Err(e) = queries::upsert_embedding(
+                        &self.conn, id, &bytes, embedder.model_version(),
+                    ).await {
+                        eprintln!("warning: failed to store embedding: {}", e);
+                    }
+                }
+                Err(e) => eprintln!("warning: failed to generate embedding: {}", e),
             }
         }
     }
@@ -436,6 +437,11 @@ impl Engine {
                     if days < 0 {
                         // -mtime -N: modified within last N days
                         if age.num_days() > -days {
+                            continue;
+                        }
+                    } else if days == 0 {
+                        // -mtime 0: modified today
+                        if age.num_days() > 0 {
                             continue;
                         }
                     } else {

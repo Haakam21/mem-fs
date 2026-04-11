@@ -40,7 +40,11 @@ pub fn load(db_path: &str) -> Settings {
     };
 
     let content = match std::fs::read_to_string(&config_path) {
-        Ok(c) => c,
+        Ok(c) if c.contains('{') => c,
+        Ok(_) => {
+            eprintln!("warning: settings.json is not valid JSON, using defaults");
+            return Settings::default();
+        }
         Err(_) => return Settings::default(),
     };
 
