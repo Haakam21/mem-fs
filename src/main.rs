@@ -311,26 +311,28 @@ fn sync_cmd() -> anyhow::Result<()> {
     let db_p = db_path();
     let settings = settings::load(&db_p);
 
-    // Stop the FUSE daemon to release the DB lock
     let mount = home_dir().join(".memfs/mount");
     eprintln!("Stopping FUSE daemon...");
+
+    // Unload service FIRST to prevent auto-restart, then stop the mount
+    let plist = home_dir().join("Library/LaunchAgents/com.memfs.mount.plist");
+    if cfg!(target_os = "macos") && plist.exists() {
+        let _ = std::process::Command::new("launchctl").args(["unload", "-w"]).arg(&plist).status();
+    } else if cfg!(target_os = "linux") {
+        let _ = std::process::Command::new("systemctl").args(["--user", "stop", "memfs"]).status();
+    }
     stop_mount(&mount);
 
     // Sync with cloud
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(db::sync(&db_p, &settings))?;
 
-    // Restart FUSE daemon via launchd/systemd (it will auto-restart)
-    // On macOS, just let launchd restart it
-    if cfg!(target_os = "macos") {
-        let plist = home_dir().join("Library/LaunchAgents/com.memfs.mount.plist");
-        if plist.exists() {
-            let _ = std::process::Command::new("launchctl").args(["unload", "-w"]).arg(&plist).status();
-            let _ = std::process::Command::new("launchctl").args(["load", "-w"]).arg(&plist).status();
-            eprintln!("FUSE daemon restarted.");
-        }
-    } else {
-        let _ = std::process::Command::new("systemctl").args(["--user", "restart", "memfs"]).status();
+    // Restart FUSE daemon
+    if cfg!(target_os = "macos") && plist.exists() {
+        let _ = std::process::Command::new("launchctl").args(["load", "-w"]).arg(&plist).status();
+        eprintln!("FUSE daemon restarted.");
+    } else if cfg!(target_os = "linux") {
+        let _ = std::process::Command::new("systemctl").args(["--user", "start", "memfs"]).status();
         eprintln!("FUSE daemon restarted.");
     }
 
