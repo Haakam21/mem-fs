@@ -88,6 +88,7 @@ All data lives in `~/.memfs/` (outside the project directory, hidden from agents
 ├── state           # Virtual CWD for CLI
 ├── settings.json   # Optional: cloud sync + search config
 ├── memfs           # Binary
+├── mount/          # Global FUSE mount point (single daemon)
 └── models/         # ONNX embedding model
 ```
 
@@ -164,16 +165,18 @@ Uses `all-MiniLM-L6-v2` (384-dim ONNX model, ~80MB). Model downloaded to `~/.mem
 - Attribute TTL = 0 (no kernel caching) to prevent stale reads after writes
 - Temp files (`.tmp.*`) skipped during auto-tagging — Claude Code's Write tool uses atomic writes
 - At facet-level, writing `people/haakam.md` auto-tags with `people:haakam` (file_stem)
-- Cloud sync: fire-and-forget `push()` spawned after every mutation
+- Untagged files allowed at root level — root is the "inbox"
+- `rename()` deletes existing target (Unix semantics) to prevent duplicate memories from atomic writes
+- Single daemon at `~/.memfs/mount`, project directories symlink `./memories → ~/.memfs/mount`
 
 ## Cloud Sync
 
-When `~/.memfs/settings.json` has `turso_url` and `turso_token`:
-- `db::open()` uses `turso::sync::Builder` with `bootstrap_if_empty(true)`
-- On mount/open, pulls latest from cloud
-- After every mutation (CLI and FUSE), spawns async `push()` (fire-and-forget)
-- `memfs sync` does explicit pull + push
-- Without credentials, everything works local-only (no change from default)
+FUSE always uses local-only DB (`Builder::new_local`). Cloud sync is a separate operation via `memfs sync` which:
+1. Stops the FUSE daemon (releases DB lock)
+2. Opens DB with sync builder (pull remote changes, push local changes)
+3. Restarts FUSE daemon via launchd/systemd
+
+Without credentials in `~/.memfs/settings.json`, everything works local-only.
 
 ## Install
 
@@ -182,7 +185,7 @@ curl -fsSL https://raw.githubusercontent.com/Haakam21/mem-fs/main/install.sh | b
 ~/.memfs/memfs init
 ```
 
-Install downloads binaries (`memfs` to `~/.memfs/`, `search` to `~/.local/bin/`). `init` interactively sets up cloud sync credentials, mounts the FUSE filesystem, seeds starter facets, and creates `CLAUDE.md` + `.claude/settings.json`. `memfs update` self-updates to the latest release.
+Install downloads binaries (`memfs` to `~/.memfs/`, `search` to `~/.local/bin/`). `init` interactively sets up cloud sync credentials, starts a single FUSE daemon at `~/.memfs/mount`, seeds starter facets, creates a `./memories` symlink + `CLAUDE.md` + `.claude/settings.json`. Running `init` in additional directories creates symlinks to the same shared mount. `memfs update` self-updates to the latest release. FUSE daemon managed by launchd (macOS) or systemd (Linux) — auto-restarts on crash, starts on login.
 
 ## Testing
 

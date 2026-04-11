@@ -66,7 +66,7 @@ Sync memories across machines via [Turso Cloud](https://turso.tech). Run `memfs 
 }
 ```
 
-Writes push to cloud automatically. On mount, pulls latest from cloud. Run `memfs sync` for manual sync.
+Run `~/.memfs/memfs sync` to pull remote changes and push local changes. FUSE runs local-only for reliability; sync is a separate step.
 
 ## Configuration
 
