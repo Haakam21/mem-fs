@@ -317,7 +317,7 @@ fn sync_cmd() -> anyhow::Result<()> {
     // Unload service FIRST to prevent auto-restart, then stop the mount
     let plist = home_dir().join("Library/LaunchAgents/com.memfs.mount.plist");
     if cfg!(target_os = "macos") && plist.exists() {
-        let _ = std::process::Command::new("launchctl").args(["unload", "-w"]).arg(&plist).status();
+        let _ = std::process::Command::new("launchctl").args(["unload", "-w"]).arg(&plist).stderr(std::process::Stdio::null()).status();
     } else if cfg!(target_os = "linux") {
         let _ = std::process::Command::new("systemctl").args(["--user", "stop", "memfs"]).status();
     }

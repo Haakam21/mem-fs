@@ -618,7 +618,7 @@ pub async fn list_untagged_memory_stubs(conn: &Connection) -> Result<Vec<MemoryS
         .query(
             "SELECT m.id, m.filename FROM memories m \
              LEFT JOIN tags t ON t.memory_id = m.id \
-             WHERE t.id IS NULL ORDER BY m.filename",
+             WHERE t.id IS NULL AND m.id > 0 ORDER BY m.filename",
             (),
         )
         .await?;

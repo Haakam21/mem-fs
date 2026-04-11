@@ -69,27 +69,43 @@ pub async fn sync(db_path: &str, settings: &Settings) -> Result<()> {
 
     eprintln!("  Pushing {} memories...", local_data.memories.len());
     conn.execute("BEGIN", ()).await?;
+    // Placeholder tags from mkdir use memory_id=0. Insert a sentinel row
+    // so the FK constraint is satisfied on the remote (Turso enforces FKs).
+    if local_data.tags.iter().any(|t| t.memory_id == 0) {
+        conn.execute(
+            "INSERT INTO memories (id, filename, content, created_at, updated_at) VALUES (0, '', '', '', '') \
+             ON CONFLICT(id) DO UPDATE SET filename=excluded.filename",
+            (),
+        ).await?;
+    }
+    // Use ON CONFLICT DO UPDATE (upsert) instead of INSERT OR REPLACE.
+    // REPLACE is internally DELETE+INSERT, which triggers ON DELETE CASCADE
+    // and can wipe tags/embeddings on the remote.
     for m in &local_data.memories {
         conn.execute(
-            "INSERT OR REPLACE INTO memories (id, filename, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO memories (id, filename, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?) \
+             ON CONFLICT(id) DO UPDATE SET filename=excluded.filename, content=excluded.content, \
+             created_at=excluded.created_at, updated_at=excluded.updated_at",
             turso::params![m.id, m.filename.as_str(), m.content.as_str(), m.created_at.as_str(), m.updated_at.as_str()],
         ).await?;
     }
     for t in &local_data.tags {
         conn.execute(
-            "INSERT OR REPLACE INTO tags (id, memory_id, facet, value) VALUES (?, ?, ?, ?)",
+            "INSERT INTO tags (id, memory_id, facet, value) VALUES (?, ?, ?, ?) \
+             ON CONFLICT(id) DO UPDATE SET memory_id=excluded.memory_id, facet=excluded.facet, value=excluded.value",
             turso::params![t.id, t.memory_id, t.facet.as_str(), t.value.as_str()],
         ).await?;
     }
     for f in &local_data.facets {
         conn.execute(
-            "INSERT OR REPLACE INTO facets (name) VALUES (?)",
+            "INSERT INTO facets (name) VALUES (?) ON CONFLICT(name) DO NOTHING",
             turso::params![f.as_str()],
         ).await?;
     }
     for e in &local_data.embeddings {
         conn.execute(
-            "INSERT OR REPLACE INTO embeddings (memory_id, embedding, model_version) VALUES (?, ?, ?)",
+            "INSERT INTO embeddings (memory_id, embedding, model_version) VALUES (?, ?, ?) \
+             ON CONFLICT(memory_id) DO UPDATE SET embedding=excluded.embedding, model_version=excluded.model_version",
             turso::params![e.memory_id, e.embedding.as_slice(), e.model_version.as_str()],
         ).await?;
     }
