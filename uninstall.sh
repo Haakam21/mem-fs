@@ -1,5 +1,5 @@
 #!/bin/bash
-# MemFS uninstall — unmounts, removes binaries, and cleans up config.
+# MemFS uninstall — stops service, unmounts, removes binaries and config.
 # Does NOT delete your memories database unless --purge is passed.
 #
 # Usage:
@@ -9,53 +9,65 @@
 set -euo pipefail
 
 PURGE=false
-INSTALL_BASE=""
 for arg in "$@"; do
     if [[ "$arg" == "--purge" ]]; then
         PURGE=true
-    else
-        INSTALL_BASE="$arg"
     fi
 done
-INSTALL_BASE="${INSTALL_BASE:-$(pwd)}"
 
-MOUNT_PATH="$INSTALL_BASE/memories"
-MEMFS_DIR="$INSTALL_BASE/.memfs"
 OS="$(uname -s)"
+DATA_DIR="$HOME/.memfs"
+GLOBAL_MOUNT="$DATA_DIR/mount"
 
-# --- Unmount ---
+# --- Stop service (prevents auto-restart) ---
 
-if mount | grep -q "$MOUNT_PATH"; then
-    echo "Unmounting $MOUNT_PATH..."
-    if [[ "$OS" == "Darwin" ]]; then
-        umount "$MOUNT_PATH" 2>/dev/null || true
-    else
-        fusermount -u "$MOUNT_PATH" 2>/dev/null || true
+if [[ "$OS" == "Darwin" ]]; then
+    PLIST="$HOME/Library/LaunchAgents/com.memfs.mount.plist"
+    if [[ -f "$PLIST" ]]; then
+        launchctl unload -w "$PLIST" 2>/dev/null || true
+        rm -f "$PLIST"
+        echo "Stopped and removed launchd service"
     fi
-    sleep 1
+else
+    systemctl --user disable --now memfs 2>/dev/null || true
+    rm -f "$HOME/.config/systemd/user/memfs.service"
+    echo "Stopped and removed systemd service"
 fi
-rmdir "$MOUNT_PATH" 2>/dev/null || true
+
+# --- Stop daemon and unmount ---
+
+pkill -f "memfs mount" 2>/dev/null || true
+if [[ "$OS" == "Darwin" ]]; then
+    umount "$GLOBAL_MOUNT" 2>/dev/null || true
+else
+    fusermount -u "$GLOBAL_MOUNT" 2>/dev/null || true
+fi
+sleep 1
+rmdir "$GLOBAL_MOUNT" 2>/dev/null || true
+
+# --- Remove local symlink (cwd) ---
+
+if [[ -L "$(pwd)/memories" ]]; then
+    rm -f "$(pwd)/memories"
+fi
 
 # --- Remove binaries ---
 
-rm -f "$HOME/.memfs/memfs"
 rm -f "$HOME/.local/bin/search"
 echo "Removed binaries"
 
-# --- Remove config ---
+# --- Remove Claude Code config (cwd) ---
 
-rm -f "$INSTALL_BASE/.claude/settings.json"
-rmdir "$INSTALL_BASE/.claude" 2>/dev/null || true
-echo "Removed config"
+rm -f "$(pwd)/.claude/settings.json" 2>/dev/null || true
+rmdir "$(pwd)/.claude" 2>/dev/null || true
 
 # --- Purge data (optional) ---
 
 if $PURGE; then
-    rm -rf "$MEMFS_DIR"
-    rm -rf "$HOME/.memfs"
-    echo "Purged .memfs directory and models"
+    rm -rf "$DATA_DIR"
+    echo "Purged ~/.memfs (database, models, config, binary)"
 else
-    echo "Data preserved at $MEMFS_DIR (use --purge to delete)"
+    echo "Data preserved at $DATA_DIR (use --purge to delete)"
 fi
 
 echo "MemFS uninstalled."
