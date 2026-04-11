@@ -65,7 +65,7 @@ Uses `turso` crate v0.4 with `sync` feature. Local-only by default (`Builder::ne
 ### Schema
 
 - `memories` (id, filename, content, created_at, updated_at)
-- `tags` (id, memory_id, facet, value) — `memory_id=0` rows are placeholders for pre-created values from `mkdir -p`
+- `tags` (id, memory_id, facet, value) — `memory_id=NULL` rows are placeholders for pre-created values from `mkdir -p`
 - `facets` (name TEXT PRIMARY KEY)
 - `embeddings` (memory_id PK, embedding BLOB, model_version TEXT)
 

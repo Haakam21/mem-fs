@@ -75,14 +75,14 @@ pub async fn value_exists(conn: &Connection, facet: &str, value: &str) -> Result
 }
 
 /// Ensure a facet:value exists by inserting a placeholder tag if needed.
-/// Placeholder tags use memory_id = 0.
+/// Placeholder tags use memory_id = NULL.
 pub async fn ensure_value(conn: &Connection, facet: &str, value: &str) -> Result<()> {
     if value_exists(conn, facet, value).await? {
         return Ok(());
     }
     create_facet(conn, facet).await?;
     conn.execute(
-        "INSERT INTO tags (memory_id, facet, value) VALUES (0, ?1, ?2)",
+        "INSERT INTO tags (memory_id, facet, value) VALUES (NULL, ?1, ?2)",
         [facet, value],
     )
     .await?;
@@ -309,7 +309,8 @@ pub async fn upsert_embedding(
     model_version: &str,
 ) -> Result<()> {
     conn.execute(
-        "INSERT OR REPLACE INTO embeddings (memory_id, embedding, model_version) VALUES (?1, ?2, ?3)",
+        "INSERT INTO embeddings (memory_id, embedding, model_version) VALUES (?1, ?2, ?3) \
+         ON CONFLICT(memory_id) DO UPDATE SET embedding=excluded.embedding, model_version=excluded.model_version",
         turso::params![memory_id, embedding, model_version],
     )
     .await?;
@@ -435,7 +436,7 @@ pub async fn remaining_facets(conn: &Connection, filters: &[Filter]) -> Result<V
     // Step 2: get distinct facets from those memories, excluding already-filtered facets
     let (id_placeholders, turso_params) = build_id_in_clause(&memory_ids, 0);
     let sql = format!(
-        "SELECT DISTINCT facet FROM tags WHERE memory_id IN ({}) AND memory_id > 0 ORDER BY facet",
+        "SELECT DISTINCT facet FROM tags WHERE memory_id IN ({}) ORDER BY facet",
         id_placeholders
     );
 
@@ -618,7 +619,7 @@ pub async fn list_untagged_memory_stubs(conn: &Connection) -> Result<Vec<MemoryS
         .query(
             "SELECT m.id, m.filename FROM memories m \
              LEFT JOIN tags t ON t.memory_id = m.id \
-             WHERE t.id IS NULL AND m.id > 0 ORDER BY m.filename",
+             WHERE t.id IS NULL ORDER BY m.filename",
             (),
         )
         .await?;
@@ -841,7 +842,7 @@ async fn get_matching_memory_ids(conn: &Connection, filters: &[Filter]) -> Resul
     }
 
     let sql = format!(
-        "SELECT memory_id FROM tags WHERE memory_id > 0 AND ({}) GROUP BY memory_id HAVING COUNT(DISTINCT facet || ':' || value) = {}",
+        "SELECT memory_id FROM tags WHERE memory_id IS NOT NULL AND ({}) GROUP BY memory_id HAVING COUNT(DISTINCT facet || ':' || value) = {}",
         conditions.join(" OR "),
         filters.len()
     );

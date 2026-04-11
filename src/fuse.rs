@@ -149,11 +149,15 @@ impl Filesystem for MemfsFs {
 
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let name_str = match name.to_str() {
-            Some(n) if !n.starts_with("._") => n,
-            _ => {
+            None => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+            Some(n) if n.starts_with("._") => {
                 reply.error(libc::ENOENT);
                 return;
             }
+            Some(n) => n,
         };
 
         let parent_path = match self.dir_path(parent) {

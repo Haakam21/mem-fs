@@ -254,7 +254,7 @@ fn load_embeddings(
             }
 
             let id_sql = format!(
-                "SELECT memory_id FROM tags WHERE memory_id > 0 AND ({}) \
+                "SELECT memory_id FROM tags WHERE memory_id IS NOT NULL AND ({}) \
                  GROUP BY memory_id HAVING COUNT(DISTINCT facet || ':' || value) = {}",
                 conditions.join(" OR "),
                 filters.len()

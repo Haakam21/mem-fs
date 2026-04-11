@@ -60,27 +60,18 @@ pub async fn sync(db_path: &str, settings: &Settings) -> Result<()> {
         .await?;
 
     eprintln!("  Pulling...");
-    db.pull().await?;
+    if let Err(e) = db.pull().await {
+        eprintln!("  Pull failed ({}), pushing fresh data.", e);
+    }
 
     // Re-insert all data through the sync connection so the CDC engine
-    // tracks every row for push.
+    // tracks every row for push. Use create_tables (not migrate) to avoid
+    // running destructive DDL through the CDC connection.
     let conn: Connection = db.connect().await?;
-    migrate(&conn).await?;
+    create_tables(&conn).await?;
 
     eprintln!("  Pushing {} memories...", local_data.memories.len());
     conn.execute("BEGIN", ()).await?;
-    // Placeholder tags from mkdir use memory_id=0. Insert a sentinel row
-    // so the FK constraint is satisfied on the remote (Turso enforces FKs).
-    if local_data.tags.iter().any(|t| t.memory_id == 0) {
-        conn.execute(
-            "INSERT INTO memories (id, filename, content, created_at, updated_at) VALUES (0, '', '', '', '') \
-             ON CONFLICT(id) DO UPDATE SET filename=excluded.filename",
-            (),
-        ).await?;
-    }
-    // Use ON CONFLICT DO UPDATE (upsert) instead of INSERT OR REPLACE.
-    // REPLACE is internally DELETE+INSERT, which triggers ON DELETE CASCADE
-    // and can wipe tags/embeddings on the remote.
     for m in &local_data.memories {
         conn.execute(
             "INSERT INTO memories (id, filename, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?) \
@@ -89,7 +80,9 @@ pub async fn sync(db_path: &str, settings: &Settings) -> Result<()> {
             turso::params![m.id, m.filename.as_str(), m.content.as_str(), m.created_at.as_str(), m.updated_at.as_str()],
         ).await?;
     }
-    for t in &local_data.tags {
+    // Skip placeholder tags (memory_id=NULL) — they're local navigation
+    // state from mkdir, not data that needs to sync across machines.
+    for t in local_data.tags.iter().filter(|t| t.memory_id.is_some()) {
         conn.execute(
             "INSERT INTO tags (id, memory_id, facet, value) VALUES (?, ?, ?, ?) \
              ON CONFLICT(id) DO UPDATE SET memory_id=excluded.memory_id, facet=excluded.facet, value=excluded.value",
@@ -134,7 +127,7 @@ struct MemoryRow {
 
 struct TagRow {
     id: i64,
-    memory_id: i64,
+    memory_id: Option<i64>,
     facet: String,
     value: String,
 }
@@ -170,7 +163,7 @@ async fn read_all_data(conn: &Connection) -> Result<LocalData> {
         while let Some(row) = rows.next().await? {
             data.tags.push(TagRow {
                 id: row.get::<i64>(0)?,
-                memory_id: row.get::<i64>(1)?,
+                memory_id: row.get::<Option<i64>>(1).unwrap_or(None),
                 facet: row.get::<String>(2)?,
                 value: row.get::<String>(3)?,
             });
@@ -192,8 +185,8 @@ async fn read_all_data(conn: &Connection) -> Result<LocalData> {
     Ok(data)
 }
 
-/// Run schema migrations — create tables and indexes if they don't exist.
-pub async fn migrate(conn: &Connection) -> Result<()> {
+/// Create tables and indexes if they don't exist. Safe to call on any connection.
+async fn create_tables(conn: &Connection) -> Result<()> {
     let _ = conn.query("PRAGMA journal_mode=WAL", ()).await?;
 
     conn.execute(
@@ -211,7 +204,7 @@ pub async fn migrate(conn: &Connection) -> Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS tags (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            memory_id INTEGER NOT NULL,
+            memory_id INTEGER,
             facet TEXT NOT NULL,
             value TEXT NOT NULL,
             FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
@@ -220,37 +213,11 @@ pub async fn migrate(conn: &Connection) -> Result<()> {
     )
     .await?;
 
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tags_facet_value ON tags (facet, value)",
-        (),
-    )
-    .await?;
-
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_unique ON tags (memory_id, facet, value)",
-        (),
-    )
-    .await?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tags_memory_id ON tags (memory_id)",
-        (),
-    )
-    .await?;
-
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS facets (
-            name TEXT PRIMARY KEY
-        )",
-        (),
-    )
-    .await?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_memories_filename ON memories (filename)",
-        (),
-    )
-    .await?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tags_facet_value ON tags (facet, value)", ()).await?;
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_unique ON tags (memory_id, facet, value)", ()).await?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tags_memory_id ON tags (memory_id)", ()).await?;
+    conn.execute("CREATE TABLE IF NOT EXISTS facets (name TEXT PRIMARY KEY)", ()).await?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_filename ON memories (filename)", ()).await?;
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS embeddings (
@@ -262,6 +229,33 @@ pub async fn migrate(conn: &Connection) -> Result<()> {
         (),
     )
     .await?;
+
+    Ok(())
+}
+
+/// Run schema migrations — create tables, indexes, and migrate old schemas.
+/// Only call on local connections (destructive DDL would corrupt CDC on sync).
+pub async fn migrate(conn: &Connection) -> Result<()> {
+    create_tables(conn).await?;
+
+    // Migration: allow NULL memory_id for placeholder tags (previously used 0).
+    let mut rows = conn.query(
+        "SELECT \"notnull\" FROM pragma_table_info('tags') WHERE name = 'memory_id'", ()
+    ).await?;
+    if let Some(row) = rows.next().await? {
+        let notnull: i64 = row.get_value(0)?.as_integer().copied().unwrap_or(0);
+        if notnull == 1 {
+            conn.execute("CREATE TABLE tags_new (id INTEGER PRIMARY KEY AUTOINCREMENT, memory_id INTEGER, facet TEXT NOT NULL, value TEXT NOT NULL, FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE)", ()).await?;
+            conn.execute("INSERT INTO tags_new SELECT * FROM tags", ()).await?;
+            conn.execute("DROP TABLE tags", ()).await?;
+            conn.execute("ALTER TABLE tags_new RENAME TO tags", ()).await?;
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tags_facet_value ON tags (facet, value)", ()).await?;
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_unique ON tags (memory_id, facet, value)", ()).await?;
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tags_memory_id ON tags (memory_id)", ()).await?;
+            conn.execute("UPDATE tags SET memory_id = NULL WHERE memory_id = 0", ()).await?;
+            conn.execute("DELETE FROM memories WHERE id = 0", ()).await?;
+        }
+    }
 
     Ok(())
 }
