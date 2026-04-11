@@ -149,9 +149,9 @@ impl Filesystem for MemfsFs {
 
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let name_str = match name.to_str() {
-            Some(n) => n,
-            None => {
-                reply.error(libc::EINVAL);
+            Some(n) if !n.starts_with("._") => n,
+            _ => {
+                reply.error(libc::ENOENT);
                 return;
             }
         };
@@ -313,7 +313,7 @@ impl Filesystem for MemfsFs {
             (ino, FileType::Directory, "..".to_string()),
         ];
 
-        for (name, is_dir, mem_id) in &items {
+        for (name, is_dir, mem_id) in items.iter().filter(|(n, _, _)| !n.is_empty() && !n.starts_with("._")) {
             let child_ino = if *is_dir {
                 let child_path = format!("{}/{}", path, name);
                 self.alloc_dir_ino(&child_path)
@@ -449,7 +449,7 @@ impl Filesystem for MemfsFs {
             // categorized (writing /memories/people/haakam.md tags with people:haakam).
             // Skip auto-tagging for temp files (e.g. .tmp.12345) — they'll be
             // renamed to the final name, which triggers proper tagging.
-            let is_temp = filename.contains(".tmp.");
+            let is_temp = filename.contains(".tmp.") || filename.starts_with("._");
             let mut tags = parsed.filters.clone();
             if let Some(ref facet) = parsed.trailing_facet {
                 if !is_temp {
