@@ -199,3 +199,8 @@ cargo test                                      # full tests including embedding
 make integration                                # 37 bash integration tests
 bash tests/test_fuse_agent.sh                   # spawn uninstructed agent against FUSE mount
 ```
+
+## Development Workflow
+
+- **Always run `cargo test` after making changes** — before committing, verify all tests pass.
+- **Update README.md and CLAUDE.md when behavior changes** — if you change how a feature works (sync, FUSE, install, etc.), update the corresponding docs in the same commit.
