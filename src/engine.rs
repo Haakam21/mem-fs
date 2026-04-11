@@ -46,6 +46,21 @@ impl Engine {
         Ok(self.current_path()?.map(|p| p.filters).unwrap_or_default())
     }
 
+    /// Build the full tag set for a path, including auto-tag from trailing facet.
+    /// E.g. at /memories/people/, filename "alice.md" produces {people:alice}.
+    fn tags_with_auto_tag(&self, parsed: &ParsedPath, filename: &str) -> std::collections::HashSet<(String, String)> {
+        let mut tags: std::collections::HashSet<(String, String)> = parsed
+            .filters.iter().map(|f| (f.facet.clone(), f.value.clone())).collect();
+        if let Some(ref facet) = parsed.trailing_facet {
+            let stem = std::path::Path::new(filename)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(filename);
+            tags.insert((facet.clone(), stem.to_string()));
+        }
+        tags
+    }
+
     /// Get the current parsed path from state.
     pub fn current_path(&self) -> Result<Option<ParsedPath>> {
         match state::read(&self.state_path)? {
@@ -253,25 +268,16 @@ impl Engine {
             .await?
             .ok_or_else(|| anyhow::anyhow!("memfs: mv: '{}': no such memory", filename))?;
 
-        // Determine what changed between source and dest paths
-        // Find the differing filter
-        let src_filters: std::collections::HashSet<(String, String)> = src_parsed
-            .filters
-            .iter()
-            .map(|f| (f.facet.clone(), f.value.clone()))
-            .collect();
-        let dst_filters: std::collections::HashSet<(String, String)> = dst_parsed
-            .filters
-            .iter()
-            .map(|f| (f.facet.clone(), f.value.clone()))
-            .collect();
+        // Build full tag sets including auto-tag from trailing facet
+        let src_tags = self.tags_with_auto_tag(&src_parsed, filename);
+        let dst_tags = self.tags_with_auto_tag(&dst_parsed, filename);
 
         // Tags to remove (in source but not dest)
-        for (facet, value) in src_filters.difference(&dst_filters) {
+        for (facet, value) in src_tags.difference(&dst_tags) {
             queries::remove_tag(&self.conn, mem.id, facet, value).await?;
         }
         // Tags to add (in dest but not source)
-        for (facet, value) in dst_filters.difference(&src_filters) {
+        for (facet, value) in dst_tags.difference(&src_tags) {
             queries::add_tag(&self.conn, mem.id, facet, value).await?;
         }
 
@@ -294,9 +300,10 @@ impl Engine {
             .await?
             .ok_or_else(|| anyhow::anyhow!("memfs: cp: '{}': no such memory", filename))?;
 
-        // Add all destination tags that aren't already present
-        for filter in &dst_parsed.filters {
-            queries::add_tag(&self.conn, mem.id, &filter.facet, &filter.value).await?;
+        // Add all destination tags (including auto-tag from trailing facet)
+        let dst_tags = self.tags_with_auto_tag(&dst_parsed, filename);
+        for (facet, value) in &dst_tags {
+            queries::add_tag(&self.conn, mem.id, facet, value).await?;
         }
 
         Ok(())
@@ -524,21 +531,22 @@ impl Engine {
         };
 
         let total = memories.len();
-        let mut count = 0;
-        for mem in &memories {
+        let mut embedded = 0;
+        for (i, mem) in memories.iter().enumerate() {
             if let Ok(embedding) = embedder.embed(&mem.content) {
                 let bytes = Embedder::serialize_embedding(&embedding);
                 queries::upsert_embedding(&self.conn, mem.id, &bytes, embedder.model_version())
                     .await?;
+                embedded += 1;
             }
-            count += 1;
-            if count % 10 == 0 || count == total {
-                eprint!("\rEmbedded {}/{} memories...", count, total);
+            let processed = i + 1;
+            if processed % 10 == 0 || processed == total {
+                eprint!("\rEmbedded {}/{} memories...", processed, total);
             }
         }
         if total > 0 {
             eprintln!();
         }
-        Ok(count)
+        Ok(embedded)
     }
 }

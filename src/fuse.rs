@@ -18,6 +18,16 @@ use crate::{db, queries};
 const FILE_INODE_BASE: u64 = 1_000_000;
 const ROOT_INO: u64 = 1;
 const TTL: Duration = Duration::from_secs(0);
+
+/// OS/editor junk files that should be hidden from listings and lookups.
+fn is_ignored_file(name: &str) -> bool {
+    name.starts_with("._") || name.starts_with(".#")
+}
+
+/// Temp/editor files where auto-tagging should be skipped.
+fn is_temp_file(name: &str) -> bool {
+    is_ignored_file(name) || name.contains(".tmp.") || name.ends_with('~')
+}
 const BLOCK_SIZE: u32 = 512;
 
 pub struct MemfsFs {
@@ -153,7 +163,7 @@ impl Filesystem for MemfsFs {
                 reply.error(libc::EINVAL);
                 return;
             }
-            Some(n) if n.starts_with("._") || n.starts_with(".#") => {
+            Some(n) if is_ignored_file(n) => {
                 reply.error(libc::ENOENT);
                 return;
             }
@@ -317,7 +327,7 @@ impl Filesystem for MemfsFs {
             (ino, FileType::Directory, "..".to_string()),
         ];
 
-        for (name, is_dir, mem_id) in items.iter().filter(|(n, _, _)| !n.is_empty() && !n.starts_with("._") && !n.starts_with(".#")) {
+        for (name, is_dir, mem_id) in items.iter().filter(|(n, _, _)| !n.is_empty() && !is_ignored_file(n)) {
             let child_ino = if *is_dir {
                 let child_path = format!("{}/{}", path, name);
                 self.alloc_dir_ino(&child_path)
@@ -453,10 +463,7 @@ impl Filesystem for MemfsFs {
             // categorized (writing /memories/people/haakam.md tags with people:haakam).
             // Skip auto-tagging for temp/editor files — they'll be renamed
             // to the final name, which triggers proper tagging.
-            let is_temp = filename.contains(".tmp.")
-                || filename.starts_with("._")
-                || filename.starts_with(".#")
-                || filename.ends_with('~');
+            let is_temp = is_temp_file(filename);
             let mut tags = parsed.filters.clone();
             if let Some(ref facet) = parsed.trailing_facet {
                 if !is_temp {
