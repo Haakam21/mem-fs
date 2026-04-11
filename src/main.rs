@@ -421,7 +421,11 @@ fn uninstall(purge: bool) -> anyhow::Result<()> {
     eprintln!("Stopping service...");
     if cfg!(target_os = "macos") {
         let plist = home_dir().join("Library/LaunchAgents/com.memfs.mount.plist");
-        let _ = std::process::Command::new("launchctl").args(["unload", "-w"]).arg(&plist).status();
+        let _ = std::process::Command::new("launchctl")
+            .args(["unload", "-w"])
+            .arg(&plist)
+            .stderr(std::process::Stdio::null())
+            .status();
         let _ = std::fs::remove_file(&plist);
     } else {
         let _ = std::process::Command::new("systemctl").args(["--user", "disable", "--now", "memfs"]).status();
@@ -484,10 +488,11 @@ fn install_launchd(
     std::fs::create_dir_all(&plist_dir)?;
     let plist_path = plist_dir.join(format!("{}.plist", label));
 
-    // Unload existing service if present
+    // Unload existing service if present (suppress error on fresh install)
     let _ = std::process::Command::new("launchctl")
         .args(["unload", "-w"])
         .arg(&plist_path)
+        .stderr(std::process::Stdio::null())
         .status();
 
     let plist = format!(
@@ -583,9 +588,16 @@ fn stop_mount(mount_path: &std::path::Path) {
         }
     }
     if cfg!(target_os = "macos") {
-        let _ = std::process::Command::new("umount").arg(mount_path).status();
+        let _ = std::process::Command::new("umount")
+            .arg(mount_path)
+            .stderr(std::process::Stdio::null())
+            .status();
     } else {
-        let _ = std::process::Command::new("fusermount").arg("-u").arg(mount_path).status();
+        let _ = std::process::Command::new("fusermount")
+            .arg("-u")
+            .arg(mount_path)
+            .stderr(std::process::Stdio::null())
+            .status();
     }
     std::thread::sleep(std::time::Duration::from_secs(1));
 }
