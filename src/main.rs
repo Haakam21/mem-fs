@@ -262,10 +262,10 @@ fn init() -> anyhow::Result<()> {
             .map(|mut d| d.next().is_some())
             .unwrap_or(false);
         if !has_entries {
-            for facet in ["people", "topics", "dates", "projects"] {
+            for facet in ["people", "topics", "dates", "projects", "sessions"] {
                 let _ = std::fs::create_dir(global_mount.join(facet));
             }
-            eprintln!("Seeded facets: people/, topics/, dates/, projects/");
+            eprintln!("Seeded facets: people/, topics/, dates/, projects/, sessions/");
         }
     } else {
         eprintln!("FUSE daemon already running.");
@@ -289,12 +289,20 @@ fn init() -> anyhow::Result<()> {
 
     // --- CLAUDE.md ---
     let claude_md = base.join("CLAUDE.md");
-    let memories_line = "Your memories are in the ./memories directory. Check them for anything relevant before responding. Use `search \"query\"` to find memories by meaning. Save important things you learn to memory.";
+    let memories_prefix = "Your memories are in the ./memories directory.";
+    let memories_line = "Your memories are in the ./memories directory. At the start of every session, check them for anything relevant. Use `search \"query\"` to find memories by meaning. Save important things you learn to memory. At the end of every session, write a summary of what you did and decided to ./memories/sessions/ (e.g., sessions/2025-04-11-refactored-sync.md).";
     if !claude_md.exists() {
         std::fs::write(&claude_md, memories_line)?;
     } else {
         let content = std::fs::read_to_string(&claude_md)?;
-        if !content.contains(memories_line) {
+        if content.contains(memories_line) {
+            // Already up to date
+        } else if let Some(start) = content.find(memories_prefix) {
+            // Replace old memories line with updated one
+            let end = content[start..].find('\n').map(|i| start + i).unwrap_or(content.len());
+            let updated = format!("{}{}{}", &content[..start], memories_line, &content[end..]);
+            std::fs::write(&claude_md, updated)?;
+        } else {
             std::fs::write(&claude_md, format!("{}\n{}", content, memories_line))?;
         }
     }
