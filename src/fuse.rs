@@ -445,7 +445,11 @@ impl Filesystem for MemfsFs {
             }
         };
         let filename = match name.to_str() {
-            Some(n) => n,
+            Some(n) if !is_ignored_file(n) => n,
+            Some(_) => {
+                reply.error(libc::EACCES);
+                return;
+            }
             None => {
                 reply.error(libc::EINVAL);
                 return;
