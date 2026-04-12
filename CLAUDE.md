@@ -174,11 +174,29 @@ Uses `all-MiniLM-L6-v2` (384-dim ONNX model, ~80MB). Model downloaded to `~/.mem
 FUSE always uses local-only DB (`Builder::new_local`). Cloud sync is a separate operation via `memfs sync` which:
 1. Unloads launchd/systemd service (prevents auto-restart), then stops daemon and unmounts
 2. Reads all local data into memory via `new_local` connection
-3. Removes sync metadata files, opens `new_remote` sync connection, pulls remote changes
-4. Clears remote data, then re-inserts all local data (filtered: no junk files, no placeholder tags) through the sync connection in a transaction, then pushes
-5. Reloads launchd/systemd service
+3. Deletes local DB + sync metadata so the embedded replica starts clean
+4. Opens `new_remote` sync connection, pulls remote changes
+5. Reads remote data from the clean replica (pure remote state, no local contamination)
+6. Deduplicates both sides by filename (keeps most recently updated version)
+7. Compares local vs remote by filename:
+   - **Remote-only**: auto-merged with remapped IDs
+   - **Same content**: no conflict
+   - **Different content**: conflict only if the remote was modified after our last push (tracked via `{db}.last_push` timestamp); otherwise treated as a local update
+8. Writes remote versions of conflicts to `~/.memfs/conflicts/`
+9. Clears all data, re-inserts the merged set (local + remote-only) through the sync connection, pushes
+10. Records push timestamp to `{db}.last_push`, reloads launchd/systemd service
 
-The clear + re-insert approach is a full replace sync. It's necessary because FUSE writes go through `new_local` which doesn't create CDC (Change Data Capture) entries. The sync builder also overwrites the local DB when setting up its embedded replica, so data must be read before the sync connection opens. Junk files (`._*`, `.#*`, `.tmp.*`, `*~`) and placeholder tags (`memory_id=NULL`) are filtered out during sync.
+### Conflict resolution
+
+When multiple agents sync to the same cloud database, conflicts are handled as follows:
+- **No conflict** (different filenames): both memories survive automatically
+- **No conflict** (same filename, same content): local version kept, no action needed
+- **Local update** (same filename, different content, remote unchanged since last push): local version wins, no conflict flagged
+- **Conflict** (same filename, different content, remote modified by another agent): local version stays in DB, remote version saved to `~/.memfs/conflicts/<filename>`. The sync output lists each conflict with both local and remote tags. The agent should reconcile (update, merge, or keep their version), then run `memfs sync` again.
+
+The `~/.memfs/conflicts/` directory is cleared at the start of each sync. The `last_push` timestamp prevents reconciled memories from re-triggering as conflicts on subsequent syncs.
+
+The clear + re-insert approach is necessary because FUSE writes go through `new_local` which doesn't create CDC (Change Data Capture) entries. The local DB is deleted before `new_remote` to ensure the embedded replica after pull contains only remote data (not a merge of local + remote). Junk files (`._*`, `.#*`, `.tmp.*`, `*~`) and duplicate filenames are filtered out during sync.
 
 Without credentials in `~/.memfs/settings.json`, everything works local-only.
 

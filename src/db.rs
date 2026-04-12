@@ -1,4 +1,6 @@
 use anyhow::Result;
+use chrono::Utc;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use turso::Connection;
 
@@ -20,9 +22,10 @@ pub async fn open(db_path: &str) -> Result<turso::Database> {
     Ok(db)
 }
 
-/// Sync local database with Turso Cloud. Opens a temporary sync connection,
-/// pulls remote changes, pushes local changes, then closes. The FUSE daemon
-/// must NOT be running (it holds the DB lock).
+/// Sync local database with Turso Cloud using merge semantics. Memories with
+/// unique filenames are auto-merged. Conflicts (same filename, different
+/// content) are written to `~/.memfs/conflicts/` for the agent to reconcile.
+/// The FUSE daemon must NOT be running (it holds the DB lock).
 pub async fn sync(db_path: &str, settings: &Settings) -> Result<()> {
     let path = util::expand_tilde(db_path);
 
@@ -46,8 +49,10 @@ pub async fn sync(db_path: &str, settings: &Settings) -> Result<()> {
         read_all_data(&c).await?
     };
 
-    // Remove stale sync metadata so the sync builder starts fresh
-    for suffix in &["-info", "-changes", "-wal-revert"] {
+    // Remove local DB and sync metadata so new_remote starts from scratch.
+    // This ensures the embedded replica after pull contains ONLY remote data,
+    // not a merge of local + remote (which would defeat conflict detection).
+    for suffix in &["", "-wal", "-shm", "-info", "-changes", "-wal-revert"] {
         let _ = std::fs::remove_file(format!("{}{}", path, suffix));
     }
 
@@ -64,57 +69,202 @@ pub async fn sync(db_path: &str, settings: &Settings) -> Result<()> {
         eprintln!("  Pull failed ({}), pushing fresh data.", e);
     }
 
-    // Re-insert all data through the sync connection so the CDC engine
-    // tracks every row for push. Use create_tables (not migrate) to avoid
-    // running destructive DDL through the CDC connection.
     let conn: Connection = db.connect().await?;
     create_tables(&conn).await?;
+    let remote_data = read_all_data(&conn).await?;
 
-    // Filter out junk files (._*, .#*, .tmp.*, *~) before syncing
-    let memories: Vec<&MemoryRow> = local_data.memories.iter()
-        .filter(|m| !util::is_junk_file(&m.filename))
+    // Deduplicate by filename (keep most recently updated) and filter junk
+    let local_memories = dedup_by_filename(
+        local_data.memories.iter().filter(|m| !util::is_junk_file(&m.filename))
+    );
+    let remote_memories = dedup_by_filename(
+        remote_data.memories.iter().filter(|m| !util::is_junk_file(&m.filename))
+    );
+
+    let mut local_by_filename: HashMap<&str, &MemoryRow> = HashMap::new();
+    let mut local_ids: HashSet<i64> = HashSet::new();
+    for m in &local_memories {
+        local_by_filename.insert(m.filename.as_str(), m);
+        local_ids.insert(m.id);
+    }
+
+    let mut local_tags_by_memory: HashMap<i64, Vec<&TagRow>> = HashMap::new();
+    for t in &local_data.tags {
+        if let Some(mid) = t.memory_id {
+            local_tags_by_memory.entry(mid).or_default().push(t);
+        }
+    }
+
+    let mut remote_tags_by_memory: HashMap<i64, Vec<&TagRow>> = HashMap::new();
+    for t in &remote_data.tags {
+        if let Some(mid) = t.memory_id {
+            remote_tags_by_memory.entry(mid).or_default().push(t);
+        }
+    }
+
+    let remote_embeddings_by_memory: HashMap<i64, &EmbeddingRow> = remote_data.embeddings.iter()
+        .map(|e| (e.memory_id, e))
         .collect();
-    eprintln!("  Pushing {} memories...", memories.len());
+
+    // If we synced before, only flag conflicts for remote data modified after our
+    // last push. This prevents our own push from echoing back as a conflict when
+    // we update a memory locally and sync again.
+    let last_push_file = format!("{}.last_push", path);
+    let last_push = std::fs::read_to_string(&last_push_file).ok();
+
+    let mut remote_only: Vec<&MemoryRow> = Vec::new();
+    let mut conflicts: Vec<(&MemoryRow, &MemoryRow)> = Vec::new(); // (local, remote)
+
+    for rm in &remote_memories {
+        match local_by_filename.get(rm.filename.as_str()) {
+            None => remote_only.push(rm),
+            Some(lm) => {
+                if lm.content != rm.content {
+                    // Only flag as conflict if the remote was modified after our
+                    // last push (by another agent). If it's unchanged since we
+                    // pushed, our local version is an update.
+                    let remote_changed = match &last_push {
+                        Some(lp) => rm.updated_at.as_str() > lp.as_str(),
+                        None => true, // first sync: all differences are conflicts
+                    };
+                    if remote_changed {
+                        conflicts.push((lm, rm));
+                    }
+                }
+            }
+        }
+    }
+    let conflicts_dir = util::expand_tilde("~/.memfs/conflicts");
+    if Path::new(&conflicts_dir).exists() {
+        let _ = std::fs::remove_dir_all(&conflicts_dir);
+    }
+    if !conflicts.is_empty() {
+        std::fs::create_dir_all(&conflicts_dir)?;
+        for (_, remote_m) in &conflicts {
+            // Use file_name() — DB stores absolute paths like /memories/note.md
+            let leaf = Path::new(&remote_m.filename)
+                .file_name()
+                .unwrap_or(std::ffi::OsStr::new(&remote_m.filename));
+            let conflict_path = Path::new(&conflicts_dir).join(leaf);
+            let tags: Vec<String> = remote_tags_by_memory
+                .get(&remote_m.id)
+                .map(|tags| tags.iter().map(|t| format!("{}:{}", t.facet, t.value)).collect())
+                .unwrap_or_default();
+            let header = if tags.is_empty() {
+                String::new()
+            } else {
+                format!("[Remote tags: {}]\n\n", tags.join(", "))
+            };
+            std::fs::write(&conflict_path, format!("{}{}", header, remote_m.content))?;
+        }
+    }
+
+    let merged_count = local_memories.len() + remote_only.len();
+    eprintln!("  Pushing {} memories ({} local, {} merged from remote)...",
+        merged_count, local_memories.len(), remote_only.len());
+
     conn.execute("BEGIN", ()).await?;
-    // Clear remote data before full re-insert (delete children first for FK)
     conn.execute("DELETE FROM embeddings", ()).await?;
     conn.execute("DELETE FROM tags", ()).await?;
     conn.execute("DELETE FROM memories", ()).await?;
     conn.execute("DELETE FROM facets", ()).await?;
-    for m in &memories {
+
+    for m in &local_memories {
         conn.execute(
             "INSERT INTO memories (id, filename, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
             turso::params![m.id, m.filename.as_str(), m.content.as_str(), m.created_at.as_str(), m.updated_at.as_str()],
         ).await?;
     }
-    let synced_ids: std::collections::HashSet<i64> = memories.iter().map(|m| m.id).collect();
-    for t in local_data.tags.iter().filter(|t| t.memory_id.map_or(false, |id| synced_ids.contains(&id))) {
+    for t in local_data.tags.iter().filter(|t| t.memory_id.map_or(false, |id| local_ids.contains(&id))) {
         conn.execute(
             "INSERT INTO tags (id, memory_id, facet, value) VALUES (?, ?, ?, ?)",
             turso::params![t.id, t.memory_id, t.facet.as_str(), t.value.as_str()],
         ).await?;
     }
-    for f in &local_data.facets {
-        conn.execute(
-            "INSERT INTO facets (name) VALUES (?)",
-            turso::params![f.as_str()],
-        ).await?;
-    }
-    for e in local_data.embeddings.iter().filter(|e| synced_ids.contains(&e.memory_id)) {
+    for e in local_data.embeddings.iter().filter(|e| local_ids.contains(&e.memory_id)) {
         conn.execute(
             "INSERT INTO embeddings (memory_id, embedding, model_version) VALUES (?, ?, ?)",
             turso::params![e.memory_id, e.embedding.as_slice(), e.model_version.as_str()],
         ).await?;
     }
+
+    // Remote-only memories get remapped IDs to avoid collisions with local
+    if !remote_only.is_empty() {
+        let mut next_memory_id = local_memories.iter().map(|m| m.id).max().unwrap_or(0) + 1;
+        let mut next_tag_id = local_data.tags.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+        for rm in &remote_only {
+            let new_id = next_memory_id;
+            next_memory_id += 1;
+            conn.execute(
+                "INSERT INTO memories (id, filename, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                turso::params![new_id, rm.filename.as_str(), rm.content.as_str(), rm.created_at.as_str(), rm.updated_at.as_str()],
+            ).await?;
+            if let Some(tags) = remote_tags_by_memory.get(&rm.id) {
+                for t in tags {
+                    let new_tag_id = next_tag_id;
+                    next_tag_id += 1;
+                    conn.execute(
+                        "INSERT INTO tags (id, memory_id, facet, value) VALUES (?, ?, ?, ?)",
+                        turso::params![new_tag_id, Some(new_id), t.facet.as_str(), t.value.as_str()],
+                    ).await?;
+                }
+            }
+            if let Some(e) = remote_embeddings_by_memory.get(&rm.id) {
+                conn.execute(
+                    "INSERT INTO embeddings (memory_id, embedding, model_version) VALUES (?, ?, ?)",
+                    turso::params![new_id, e.embedding.as_slice(), e.model_version.as_str()],
+                ).await?;
+            }
+        }
+    }
+
+    let mut all_facets: HashSet<&str> = HashSet::new();
+    for f in &local_data.facets { all_facets.insert(f.as_str()); }
+    for f in &remote_data.facets { all_facets.insert(f.as_str()); }
+    for f in &all_facets {
+        conn.execute(
+            "INSERT INTO facets (name) VALUES (?)",
+            turso::params![*f],
+        ).await?;
+    }
+
     conn.execute("COMMIT", ()).await?;
 
     db.push().await?;
-    eprintln!("Synced.");
+
+    // Record push time so the next sync can distinguish "our own data echoing
+    // back" from "data modified by another agent"
+    let _ = std::fs::write(&last_push_file, Utc::now().to_rfc3339());
+
+    if conflicts.is_empty() {
+        eprintln!("Synced.");
+    } else {
+        eprintln!();
+        eprintln!("Synced with {} conflict(s). Remote versions saved to:", conflicts.len());
+        eprintln!("  {}/", conflicts_dir);
+        eprintln!();
+        for (local_m, remote_m) in &conflicts {
+            let local_tags: Vec<String> = local_tags_by_memory
+                .get(&local_m.id)
+                .map(|tags| tags.iter().map(|t| format!("{}:{}", t.facet, t.value)).collect())
+                .unwrap_or_default();
+            let remote_tags: Vec<String> = remote_tags_by_memory
+                .get(&remote_m.id)
+                .map(|tags| tags.iter().map(|t| format!("{}:{}", t.facet, t.value)).collect())
+                .unwrap_or_default();
+            eprintln!("  {} (local tags: [{}], remote tags: [{}])",
+                remote_m.filename,
+                local_tags.join(", "),
+                remote_tags.join(", "));
+        }
+        eprintln!();
+        eprintln!("Reconcile conflicts, then run `memfs sync` again.");
+    }
 
     Ok(())
 }
 
-struct LocalData {
+struct DbSnapshot {
     memories: Vec<MemoryRow>,
     tags: Vec<TagRow>,
     facets: Vec<String>,
@@ -142,8 +292,25 @@ struct EmbeddingRow {
     model_version: String,
 }
 
-async fn read_all_data(conn: &Connection) -> Result<LocalData> {
-    let mut data = LocalData {
+/// Deduplicate memories by filename, keeping the most recently updated version.
+/// Multiple writes to the same filename create duplicate rows — resolve them here.
+fn dedup_by_filename<'a>(memories: impl Iterator<Item = &'a MemoryRow>) -> Vec<&'a MemoryRow> {
+    let mut by_filename: HashMap<&str, &MemoryRow> = HashMap::new();
+    for m in memories {
+        by_filename
+            .entry(m.filename.as_str())
+            .and_modify(|existing| {
+                if m.updated_at > existing.updated_at {
+                    *existing = m;
+                }
+            })
+            .or_insert(m);
+    }
+    by_filename.into_values().collect()
+}
+
+async fn read_all_data(conn: &Connection) -> Result<DbSnapshot> {
+    let mut data = DbSnapshot {
         memories: Vec::new(),
         tags: Vec::new(),
         facets: Vec::new(),
@@ -268,4 +435,118 @@ pub async fn migrate(conn: &Connection) -> Result<()> {
     ).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mem(id: i64, filename: &str, content: &str, updated_at: &str) -> MemoryRow {
+        MemoryRow {
+            id,
+            filename: filename.to_string(),
+            content: content.to_string(),
+            created_at: "2025-01-01T00:00:00Z".to_string(),
+            updated_at: updated_at.to_string(),
+        }
+    }
+
+    #[test]
+    fn dedup_no_duplicates() {
+        let memories = vec![
+            mem(1, "a.md", "aaa", "2025-01-01T00:00:00Z"),
+            mem(2, "b.md", "bbb", "2025-01-02T00:00:00Z"),
+        ];
+        let result = dedup_by_filename(memories.iter());
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn dedup_keeps_newest() {
+        let memories = vec![
+            mem(1, "note.md", "old version", "2025-01-01T00:00:00Z"),
+            mem(2, "note.md", "new version", "2025-01-02T00:00:00Z"),
+        ];
+        let result = dedup_by_filename(memories.iter());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, "new version");
+        assert_eq!(result[0].id, 2);
+    }
+
+    #[test]
+    fn dedup_keeps_newest_regardless_of_order() {
+        let memories = vec![
+            mem(2, "note.md", "new version", "2025-01-02T00:00:00Z"),
+            mem(1, "note.md", "old version", "2025-01-01T00:00:00Z"),
+        ];
+        let result = dedup_by_filename(memories.iter());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, "new version");
+    }
+
+    #[test]
+    fn dedup_multiple_filenames_with_duplicates() {
+        let memories = vec![
+            mem(1, "a.md", "a-old", "2025-01-01T00:00:00Z"),
+            mem(2, "b.md", "b-old", "2025-01-01T00:00:00Z"),
+            mem(3, "a.md", "a-new", "2025-01-02T00:00:00Z"),
+            mem(4, "b.md", "b-new", "2025-01-03T00:00:00Z"),
+            mem(5, "c.md", "c-only", "2025-01-01T00:00:00Z"),
+        ];
+        let result = dedup_by_filename(memories.iter());
+        assert_eq!(result.len(), 3);
+        let by_name: HashMap<&str, &MemoryRow> = result.iter()
+            .map(|m| (m.filename.as_str(), *m))
+            .collect();
+        assert_eq!(by_name["a.md"].content, "a-new");
+        assert_eq!(by_name["b.md"].content, "b-new");
+        assert_eq!(by_name["c.md"].content, "c-only");
+    }
+
+    #[test]
+    fn dedup_empty_input() {
+        let memories: Vec<MemoryRow> = vec![];
+        let result = dedup_by_filename(memories.iter());
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn dedup_single_entry() {
+        let memories = vec![mem(1, "only.md", "content", "2025-01-01T00:00:00Z")];
+        let result = dedup_by_filename(memories.iter());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].filename, "only.md");
+    }
+
+    #[test]
+    fn dedup_three_versions_same_file() {
+        let memories = vec![
+            mem(1, "note.md", "v1", "2025-01-01T00:00:00Z"),
+            mem(2, "note.md", "v2", "2025-01-02T00:00:00Z"),
+            mem(3, "note.md", "v3", "2025-01-03T00:00:00Z"),
+        ];
+        let result = dedup_by_filename(memories.iter());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, "v3");
+    }
+
+    #[test]
+    fn conflict_file_uses_leaf_name() {
+        // DB stores absolute paths like /memories/note.md
+        // Conflict files should use just the leaf name
+        let filename = "/memories/topics/work/note.md";
+        let leaf = std::path::Path::new(filename)
+            .file_name()
+            .unwrap_or(std::ffi::OsStr::new(filename));
+        assert_eq!(leaf, "note.md");
+    }
+
+    #[test]
+    fn conflict_file_leaf_simple_name() {
+        let filename = "note.md";
+        let leaf = std::path::Path::new(filename)
+            .file_name()
+            .unwrap_or(std::ffi::OsStr::new(filename));
+        assert_eq!(leaf, "note.md");
+    }
 }

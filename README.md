@@ -66,7 +66,9 @@ Sync memories across machines via [Turso Cloud](https://turso.tech). Run `memfs 
 }
 ```
 
-Run `~/.memfs/memfs sync` to pull remote changes and push local changes. FUSE runs local-only for reliability; sync is a separate step.
+Run `~/.memfs/memfs sync` to pull remote changes, merge, and push. FUSE runs local-only for reliability; sync is a separate step.
+
+Sync uses **merge semantics**: memories with unique filenames are auto-merged from both sides. If two agents wrote different content under the same filename, the local version is kept and the remote version is saved to `~/.memfs/conflicts/` for manual reconciliation. After resolving conflicts, run `memfs sync` again.
 
 ## Configuration
 
