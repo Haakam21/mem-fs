@@ -290,7 +290,7 @@ fn init() -> anyhow::Result<()> {
     // --- CLAUDE.md ---
     let claude_md = base.join("CLAUDE.md");
     let memories_prefix = "Your memories are in the ./memories directory.";
-    let memories_line = "Your memories are in the ./memories directory. At the start of every session, check them for anything relevant. Use `search \"query\"` to find memories by meaning. Save important things you learn to memory. At the end of every session, write a summary of what you did and decided to ./memories/sessions/ (e.g., sessions/2025-04-11-refactored-sync.md).";
+    let memories_line = "Your memories are in the ./memories directory. At the start of every session, check them for anything relevant. Use `search \"query\"` to find memories by meaning. Save important things you learn to memory. At the end of every session, write a summary of what you did and decided to ./memories/sessions/.";
     if !claude_md.exists() {
         std::fs::write(&claude_md, memories_line)?;
     } else {
