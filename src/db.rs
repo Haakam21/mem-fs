@@ -83,31 +83,26 @@ pub async fn sync(db_path: &str, settings: &Settings) -> Result<()> {
     conn.execute("DELETE FROM facets", ()).await?;
     for m in &memories {
         conn.execute(
-            "INSERT INTO memories (id, filename, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?) \
-             ON CONFLICT(id) DO UPDATE SET filename=excluded.filename, content=excluded.content, \
-             created_at=excluded.created_at, updated_at=excluded.updated_at",
+            "INSERT INTO memories (id, filename, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
             turso::params![m.id, m.filename.as_str(), m.content.as_str(), m.created_at.as_str(), m.updated_at.as_str()],
         ).await?;
     }
-    // Skip placeholder tags and tags referencing junk memories
     let synced_ids: std::collections::HashSet<i64> = memories.iter().map(|m| m.id).collect();
     for t in local_data.tags.iter().filter(|t| t.memory_id.map_or(false, |id| synced_ids.contains(&id))) {
         conn.execute(
-            "INSERT INTO tags (id, memory_id, facet, value) VALUES (?, ?, ?, ?) \
-             ON CONFLICT(id) DO UPDATE SET memory_id=excluded.memory_id, facet=excluded.facet, value=excluded.value",
+            "INSERT INTO tags (id, memory_id, facet, value) VALUES (?, ?, ?, ?)",
             turso::params![t.id, t.memory_id, t.facet.as_str(), t.value.as_str()],
         ).await?;
     }
     for f in &local_data.facets {
         conn.execute(
-            "INSERT INTO facets (name) VALUES (?) ON CONFLICT(name) DO NOTHING",
+            "INSERT INTO facets (name) VALUES (?)",
             turso::params![f.as_str()],
         ).await?;
     }
     for e in local_data.embeddings.iter().filter(|e| synced_ids.contains(&e.memory_id)) {
         conn.execute(
-            "INSERT INTO embeddings (memory_id, embedding, model_version) VALUES (?, ?, ?) \
-             ON CONFLICT(memory_id) DO UPDATE SET embedding=excluded.embedding, model_version=excluded.model_version",
+            "INSERT INTO embeddings (memory_id, embedding, model_version) VALUES (?, ?, ?)",
             turso::params![e.memory_id, e.embedding.as_slice(), e.model_version.as_str()],
         ).await?;
     }
@@ -266,7 +261,7 @@ pub async fn migrate(conn: &Connection) -> Result<()> {
         }
     }
 
-    // Clean up junk files (._*, .#*, .tmp.*, *~) from older versions
+    // Clean up junk files from older versions (keep in sync with util::is_junk_file)
     conn.execute(
         "DELETE FROM memories WHERE filename LIKE '.\\_%' ESCAPE '\\' OR filename LIKE '.#%' OR filename LIKE '%.tmp.%' OR filename LIKE '%~'",
         (),

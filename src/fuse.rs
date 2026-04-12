@@ -20,11 +20,6 @@ const ROOT_INO: u64 = 1;
 const TTL: Duration = Duration::from_secs(0);
 
 use crate::util;
-
-/// OS/editor junk files that should be hidden from listings and lookups.
-fn is_ignored_file(name: &str) -> bool {
-    name.starts_with("._") || name.starts_with(".#")
-}
 const BLOCK_SIZE: u32 = 512;
 
 pub struct MemfsFs {
@@ -160,7 +155,7 @@ impl Filesystem for MemfsFs {
                 reply.error(libc::EINVAL);
                 return;
             }
-            Some(n) if is_ignored_file(n) => {
+            Some(n) if util::is_junk_file(n) => {
                 reply.error(libc::ENOENT);
                 return;
             }
@@ -324,7 +319,7 @@ impl Filesystem for MemfsFs {
             (ino, FileType::Directory, "..".to_string()),
         ];
 
-        for (name, is_dir, mem_id) in items.iter().filter(|(n, _, _)| !n.is_empty() && !is_ignored_file(n)) {
+        for (name, is_dir, mem_id) in items.iter().filter(|(n, _, _)| !n.is_empty() && !util::is_junk_file(n)) {
             let child_ino = if *is_dir {
                 let child_path = format!("{}/{}", path, name);
                 self.alloc_dir_ino(&child_path)
@@ -442,7 +437,7 @@ impl Filesystem for MemfsFs {
             }
         };
         let filename = match name.to_str() {
-            Some(n) if !is_ignored_file(n) => n,
+            Some(n) if !util::is_junk_file(n) => n,
             Some(_) => {
                 reply.error(libc::EACCES);
                 return;

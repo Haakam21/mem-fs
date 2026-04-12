@@ -163,7 +163,7 @@ Uses `all-MiniLM-L6-v2` (384-dim ONNX model, ~80MB). Model downloaded to `~/.mem
 - Write buffering: `create()` inserts empty memory immediately (stable inode), `write()` buffers, `release()` flushes
 - Truncation via `setattr(size=0)` — macFUSE strips O_TRUNC from open flags
 - Attribute TTL = 0 (no kernel caching) to prevent stale reads after writes
-- Temp/editor files (`.tmp.*`, `._*`, `.#*`, `*~`) skipped during auto-tagging; `._*` and `.#*` rejected at create and hidden from lookup/readdir
+- Temp/editor files (`.tmp.*`, `._*`, `.#*`, `*~`) skipped during auto-tagging, rejected at create, and hidden from lookup/readdir
 - At facet-level, writing `people/haakam.md` auto-tags with `people:haakam` (file_stem)
 - Untagged files allowed at root level — root is the "inbox"
 - `rename()` deletes existing target (Unix semantics) to prevent duplicate memories from atomic writes
