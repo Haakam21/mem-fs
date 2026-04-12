@@ -70,9 +70,18 @@ pub async fn sync(db_path: &str, settings: &Settings) -> Result<()> {
     let conn: Connection = db.connect().await?;
     create_tables(&conn).await?;
 
-    eprintln!("  Pushing {} memories...", local_data.memories.len());
+    // Filter out junk files (._*, .#*, .tmp.*, *~) before syncing
+    let memories: Vec<&MemoryRow> = local_data.memories.iter()
+        .filter(|m| !util::is_junk_file(&m.filename))
+        .collect();
+    eprintln!("  Pushing {} memories...", memories.len());
     conn.execute("BEGIN", ()).await?;
-    for m in &local_data.memories {
+    // Clear remote data before full re-insert (delete children first for FK)
+    conn.execute("DELETE FROM embeddings", ()).await?;
+    conn.execute("DELETE FROM tags", ()).await?;
+    conn.execute("DELETE FROM memories", ()).await?;
+    conn.execute("DELETE FROM facets", ()).await?;
+    for m in &memories {
         conn.execute(
             "INSERT INTO memories (id, filename, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?) \
              ON CONFLICT(id) DO UPDATE SET filename=excluded.filename, content=excluded.content, \
@@ -80,9 +89,9 @@ pub async fn sync(db_path: &str, settings: &Settings) -> Result<()> {
             turso::params![m.id, m.filename.as_str(), m.content.as_str(), m.created_at.as_str(), m.updated_at.as_str()],
         ).await?;
     }
-    // Skip placeholder tags (memory_id=NULL) — they're local navigation
-    // state from mkdir, not data that needs to sync across machines.
-    for t in local_data.tags.iter().filter(|t| t.memory_id.is_some()) {
+    // Skip placeholder tags and tags referencing junk memories
+    let synced_ids: std::collections::HashSet<i64> = memories.iter().map(|m| m.id).collect();
+    for t in local_data.tags.iter().filter(|t| t.memory_id.map_or(false, |id| synced_ids.contains(&id))) {
         conn.execute(
             "INSERT INTO tags (id, memory_id, facet, value) VALUES (?, ?, ?, ?) \
              ON CONFLICT(id) DO UPDATE SET memory_id=excluded.memory_id, facet=excluded.facet, value=excluded.value",
@@ -95,7 +104,7 @@ pub async fn sync(db_path: &str, settings: &Settings) -> Result<()> {
             turso::params![f.as_str()],
         ).await?;
     }
-    for e in &local_data.embeddings {
+    for e in local_data.embeddings.iter().filter(|e| synced_ids.contains(&e.memory_id)) {
         conn.execute(
             "INSERT INTO embeddings (memory_id, embedding, model_version) VALUES (?, ?, ?) \
              ON CONFLICT(memory_id) DO UPDATE SET embedding=excluded.embedding, model_version=excluded.model_version",
@@ -256,6 +265,12 @@ pub async fn migrate(conn: &Connection) -> Result<()> {
             conn.execute("DELETE FROM memories WHERE id = 0", ()).await?;
         }
     }
+
+    // Clean up junk files (._*, .#*, .tmp.*, *~) from older versions
+    conn.execute(
+        "DELETE FROM memories WHERE filename LIKE '.\\_%' ESCAPE '\\' OR filename LIKE '.#%' OR filename LIKE '%.tmp.%' OR filename LIKE '%~'",
+        (),
+    ).await?;
 
     Ok(())
 }

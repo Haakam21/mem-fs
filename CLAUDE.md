@@ -175,10 +175,10 @@ FUSE always uses local-only DB (`Builder::new_local`). Cloud sync is a separate 
 1. Unloads launchd/systemd service (prevents auto-restart), then stops daemon and unmounts
 2. Reads all local data into memory via `new_local` connection
 3. Removes sync metadata files, opens `new_remote` sync connection, pulls remote changes
-4. Re-inserts all local data through the sync connection (in a transaction) so the CDC engine tracks it, then pushes
+4. Clears remote data, then re-inserts all local data (filtered: no junk files, no placeholder tags) through the sync connection in a transaction, then pushes
 5. Reloads launchd/systemd service
 
-The re-insert step is necessary because FUSE writes go through `new_local` which doesn't create CDC (Change Data Capture) entries. The sync builder also overwrites the local DB when setting up its embedded replica, so data must be read before the sync connection opens.
+The clear + re-insert approach is a full replace sync. It's necessary because FUSE writes go through `new_local` which doesn't create CDC (Change Data Capture) entries. The sync builder also overwrites the local DB when setting up its embedded replica, so data must be read before the sync connection opens. Junk files (`._*`, `.#*`, `.tmp.*`, `*~`) and placeholder tags (`memory_id=NULL`) are filtered out during sync.
 
 Without credentials in `~/.memfs/settings.json`, everything works local-only.
 

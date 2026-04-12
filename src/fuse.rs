@@ -19,14 +19,11 @@ const FILE_INODE_BASE: u64 = 1_000_000;
 const ROOT_INO: u64 = 1;
 const TTL: Duration = Duration::from_secs(0);
 
+use crate::util;
+
 /// OS/editor junk files that should be hidden from listings and lookups.
 fn is_ignored_file(name: &str) -> bool {
     name.starts_with("._") || name.starts_with(".#")
-}
-
-/// Temp/editor files where auto-tagging should be skipped.
-fn is_temp_file(name: &str) -> bool {
-    is_ignored_file(name) || name.contains(".tmp.") || name.ends_with('~')
 }
 const BLOCK_SIZE: u32 = 512;
 
@@ -467,7 +464,7 @@ impl Filesystem for MemfsFs {
             // categorized (writing /memories/people/haakam.md tags with people:haakam).
             // Skip auto-tagging for temp/editor files — they'll be renamed
             // to the final name, which triggers proper tagging.
-            let is_temp = is_temp_file(filename);
+            let is_temp = util::is_junk_file(filename);
             let mut tags = parsed.filters.clone();
             if let Some(ref facet) = parsed.trailing_facet {
                 if !is_temp {
