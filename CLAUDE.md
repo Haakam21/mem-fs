@@ -68,6 +68,7 @@ Uses `turso` crate v0.4 with `sync` feature. Local-only by default (`Builder::ne
 - `tags` (id, memory_id, facet, value) — `memory_id=NULL` rows are placeholders for pre-created values from `mkdir -p`
 - `facets` (name TEXT PRIMARY KEY)
 - `embeddings` (memory_id PK, embedding BLOB, model_version TEXT)
+- `centroids` (facet TEXT, value TEXT, embedding_sum BLOB, count INTEGER, PK(facet, value)) — centroid sums for auto-tagging
 
 ### Query Pattern
 
@@ -99,11 +100,13 @@ All data lives in `~/.memfs/` (outside the project directory, hidden from agents
   "turso_url": "libsql://your-db.turso.io",
   "turso_token": "your-token",
   "search_threshold": 0.3,
-  "search_limit": 10
+  "search_limit": 10,
+  "autotag_threshold": 0.5,
+  "autotag_min_memories": 3
 }
 ```
 
-All fields optional. Defaults: local-only DB, threshold 0.3, limit 10.
+All fields optional. Defaults: local-only DB, search threshold 0.3, search limit 10, autotag threshold 0.5, autotag min memories 3.
 
 ### Environment variables (override defaults)
 
@@ -138,6 +141,17 @@ Uses `all-MiniLM-L6-v2` (384-dim ONNX model, ~80MB). Model downloaded to `~/.mem
 - Stored in `embeddings` table as BLOB (1536 bytes per memory)
 - Standalone `search` binary installed to `~/.local/bin/search` (on PATH, discoverable by agents)
 - Search binary reads DB via rusqlite with read-only copy to bypass FUSE daemon's file lock
+
+## Auto-Tagging
+
+Memories are automatically tagged based on centroid matching. When a memory is written, its embedding is compared against the centroid (average embedding) of each existing facet:value. Tags are applied when cosine similarity exceeds `autotag_threshold` (default 0.5).
+
+- Centroids stored in `centroids` table as unnormalized sums + count for exact incremental updates
+- Only active when a facet:value has at least `autotag_min_memories` (default 3) tagged memories
+- `reindex` rebuilds all centroids from scratch
+- Centroids cleared during sync (rebuild via `reindex` or incrementally as memories are written)
+- All auto-tag operations are non-fatal — errors logged as warnings, never fail writes
+- Implementation: `engine::embed_and_autotag()` is the single entry point used by both CLI and FUSE
 
 ## FUSE Mount
 

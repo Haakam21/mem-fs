@@ -116,13 +116,7 @@ impl Embedder {
             }
         }
 
-        // L2 normalize
-        let norm: f32 = pooled.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm > 0.0 {
-            for val in pooled.iter_mut() {
-                *val /= norm;
-            }
-        }
+        l2_normalize(&mut pooled);
 
         Ok(pooled)
     }
@@ -150,6 +144,16 @@ impl Embedder {
 
     pub fn model_version(&self) -> &str {
         MODEL_VERSION
+    }
+}
+
+/// L2 normalize a vector in-place.
+pub fn l2_normalize(vec: &mut [f32]) {
+    let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for val in vec.iter_mut() {
+            *val /= norm;
+        }
     }
 }
 

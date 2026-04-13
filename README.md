@@ -55,6 +55,14 @@ search -k 5 -t 0.4 "cooking recipes"            # top 5, threshold 0.4
 
 Uses a local embedding model (all-MiniLM-L6-v2, downloaded on first use). Embeddings generated automatically on write.
 
+## Auto-Tagging
+
+Memories are automatically tagged based on semantic similarity. When you write a memory, its embedding is compared against the centroid of each existing facet:value. If similarity exceeds a threshold, the tag is applied automatically.
+
+For example, if you have 3+ memories tagged `topics:cooking`, writing a new memory about a recipe anywhere in the filesystem will auto-tag it with `topics:cooking` — no manual tagging needed.
+
+Auto-tagging activates once a facet:value has at least 3 tagged memories (configurable via `autotag_min_memories`). The similarity threshold defaults to 0.5 (configurable via `autotag_threshold`).
+
 ## Cloud Sync
 
 Sync memories across machines via [Turso Cloud](https://turso.tech). Run `memfs init` and enter your credentials, or create `~/.memfs/settings.json`:
@@ -85,7 +93,9 @@ Optional settings.json fields:
 ```json
 {
   "search_threshold": 0.3,
-  "search_limit": 10
+  "search_limit": 10,
+  "autotag_threshold": 0.5,
+  "autotag_min_memories": 3
 }
 ```
 

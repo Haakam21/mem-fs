@@ -1,8 +1,10 @@
 use anyhow::{bail, Result};
+#[cfg(feature = "search")]
+use std::collections::{HashMap, HashSet};
 use turso::Connection;
 
 #[cfg(feature = "search")]
-use crate::embeddings::Embedder;
+use crate::embeddings::{self, Embedder, EMBEDDING_DIM};
 use crate::path::{self, Filter, ParsedPath};
 use crate::queries::{self, Memory};
 use crate::state;
@@ -14,6 +16,10 @@ pub struct Engine {
     pub mount_point: String,
     #[cfg(feature = "search")]
     pub embedder: Option<Embedder>,
+    #[cfg(feature = "search")]
+    pub autotag_threshold: f32,
+    #[cfg(feature = "search")]
+    pub autotag_min_memories: usize,
 }
 
 /// An entry returned by `ls` — either a directory (facet/value) or a file (memory).
@@ -31,6 +37,8 @@ impl Engine {
         state_path: String,
         mount_point: String,
         #[cfg(feature = "search")] embedder: Option<Embedder>,
+        #[cfg(feature = "search")] autotag_threshold: f32,
+        #[cfg(feature = "search")] autotag_min_memories: usize,
     ) -> Self {
         Self {
             conn,
@@ -38,6 +46,10 @@ impl Engine {
             mount_point,
             #[cfg(feature = "search")]
             embedder,
+            #[cfg(feature = "search")]
+            autotag_threshold,
+            #[cfg(feature = "search")]
+            autotag_min_memories,
         }
     }
 
@@ -334,25 +346,57 @@ impl Engine {
         Ok(())
     }
 
-    /// Generate and store embedding for a memory (non-fatal if model unavailable).
+    /// Generate embedding, auto-tag, and update centroids (non-fatal if model unavailable).
     #[cfg(feature = "search")]
     async fn embed_memory(&self, id: i64, content: &str) {
-        if content.is_empty() {
-            return;
-        }
         if let Some(ref embedder) = self.embedder {
-            match embedder.embed(content) {
-                Ok(embedding) => {
-                    let bytes = Embedder::serialize_embedding(&embedding);
-                    if let Err(e) = queries::upsert_embedding(
-                        &self.conn, id, &bytes, embedder.model_version(),
-                    ).await {
-                        eprintln!("warning: failed to store embedding: {}", e);
+            embed_and_autotag(
+                &self.conn, embedder, id, content,
+                self.autotag_threshold, self.autotag_min_memories,
+            ).await;
+        }
+    }
+
+    /// Rebuild all centroids from scratch.
+    #[cfg(feature = "search")]
+    pub async fn rebuild_all_centroids(&self) -> Result<usize> {
+        queries::delete_all_centroids(&self.conn).await?;
+
+        let stubs = queries::list_memory_stubs(&self.conn, &[]).await?;
+        let ids: Vec<i64> = stubs.iter().map(|s| s.id).collect();
+        let tags_map = queries::get_tags_batch(&self.conn, &ids).await?;
+
+        let all_embs = queries::list_memory_embeddings(&self.conn, &[]).await?;
+        let emb_map: HashMap<i64, Vec<f32>> = all_embs
+            .into_iter()
+            .filter_map(|(id, _, _, bytes)| {
+                Embedder::deserialize_embedding(&bytes).ok().map(|e| (id, e))
+            })
+            .collect();
+
+        let mut centroids: HashMap<(String, String), (Vec<f32>, i64)> = HashMap::new();
+        for (id, tags) in &tags_map {
+            if let Some(emb) = emb_map.get(id) {
+                for tag in tags {
+                    let entry = centroids
+                        .entry((tag.facet.clone(), tag.value.clone()))
+                        .or_insert_with(|| (vec![0.0f32; EMBEDDING_DIM], 0));
+                    for (s, e) in entry.0.iter_mut().zip(emb.iter()) {
+                        *s += e;
                     }
+                    entry.1 += 1;
                 }
-                Err(e) => eprintln!("warning: failed to generate embedding: {}", e),
             }
         }
+
+        let mut count = 0;
+        for ((facet, value), (sum, n)) in &centroids {
+            let sum_bytes = Embedder::serialize_embedding(sum);
+            queries::upsert_centroid(&self.conn, facet, value, &sum_bytes, *n).await?;
+            count += 1;
+        }
+
+        Ok(count)
     }
 
     // --- Search ---
@@ -547,6 +591,126 @@ impl Engine {
         if total > 0 {
             eprintln!();
         }
+
+        eprint!("Rebuilding centroids...");
+        match self.rebuild_all_centroids().await {
+            Ok(count) => eprintln!("\rBuilt {} centroids.    ", count),
+            Err(e) => eprintln!("\nwarning: failed to rebuild centroids: {}", e),
+        }
+
         Ok(embedded)
+    }
+}
+
+/// Embed a memory, auto-tag based on centroids, and update centroids.
+/// Used by both Engine (CLI) and FUSE write paths.
+#[cfg(feature = "search")]
+pub async fn embed_and_autotag(
+    conn: &Connection,
+    embedder: &Embedder,
+    memory_id: i64,
+    content: &str,
+    threshold: f32,
+    min_memories: usize,
+) {
+    if content.is_empty() {
+        return;
+    }
+
+    let embedding = match embedder.embed(content) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("warning: failed to generate embedding: {}", e);
+            return;
+        }
+    };
+
+    let emb_bytes = Embedder::serialize_embedding(&embedding);
+    if let Err(e) =
+        queries::upsert_embedding(conn, memory_id, &emb_bytes, embedder.model_version()).await
+    {
+        eprintln!("warning: failed to store embedding: {}", e);
+        return;
+    }
+
+    let tags = match queries::get_tags(conn, memory_id).await {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+
+    let centroids = queries::get_all_centroids(conn).await.unwrap_or_default();
+
+    // Auto-tag: compare embedding against each centroid
+    let existing_set: HashSet<(&str, &str)> = tags
+        .iter()
+        .map(|f| (f.facet.as_str(), f.value.as_str()))
+        .collect();
+
+    let mut auto_tags = Vec::new();
+    let mut centroid_buf = vec![0.0f32; EMBEDDING_DIM];
+
+    for centroid in &centroids {
+        if centroid.count < min_memories as i64 {
+            continue;
+        }
+        if existing_set.contains(&(centroid.facet.as_str(), centroid.value.as_str())) {
+            continue;
+        }
+        let sum = match Embedder::deserialize_embedding(&centroid.embedding_sum) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let count = centroid.count as f32;
+        for (buf, s) in centroid_buf.iter_mut().zip(sum.iter()) {
+            *buf = s / count;
+        }
+        embeddings::l2_normalize(&mut centroid_buf);
+        let similarity = Embedder::cosine_similarity(&embedding, &centroid_buf);
+        if similarity >= threshold {
+            auto_tags.push((centroid.facet.clone(), centroid.value.clone()));
+        }
+    }
+
+    for (facet, value) in &auto_tags {
+        if let Err(e) = queries::add_tag(conn, memory_id, facet, value).await {
+            eprintln!("warning: failed to auto-tag {}:{}: {}", facet, value, e);
+        }
+    }
+
+    // Update centroids for all tags (manual + auto)
+    let mut all_tags = tags;
+    for (facet, value) in auto_tags {
+        all_tags.push(Filter { facet, value });
+    }
+
+    let centroid_map: HashMap<(&str, &str), &queries::CentroidRow> = centroids
+        .iter()
+        .map(|c| ((c.facet.as_str(), c.value.as_str()), c))
+        .collect();
+
+    for tag in &all_tags {
+        let (sum_bytes, count) =
+            if let Some(existing) = centroid_map.get(&(tag.facet.as_str(), tag.value.as_str())) {
+                if let Ok(old_sum) = Embedder::deserialize_embedding(&existing.embedding_sum) {
+                    let new_sum: Vec<f32> = old_sum
+                        .iter()
+                        .zip(embedding.iter())
+                        .map(|(a, b)| a + b)
+                        .collect();
+                    (Embedder::serialize_embedding(&new_sum), existing.count + 1)
+                } else {
+                    (emb_bytes.clone(), 1)
+                }
+            } else {
+                (emb_bytes.clone(), 1)
+            };
+        if let Err(e) =
+            queries::upsert_centroid(conn, &tag.facet, &tag.value, &sum_bytes, count).await
+        {
+            eprintln!(
+                "warning: failed to upsert centroid {}:{}: {}",
+                tag.facet, tag.value, e
+            );
+        }
     }
 }

@@ -375,6 +375,56 @@ pub async fn list_memory_embeddings(
     Ok(results)
 }
 
+// --- Centroids ---
+
+#[cfg(feature = "search")]
+pub struct CentroidRow {
+    pub facet: String,
+    pub value: String,
+    pub embedding_sum: Vec<u8>,
+    pub count: i64,
+}
+
+#[cfg(feature = "search")]
+pub async fn upsert_centroid(
+    conn: &Connection,
+    facet: &str,
+    value: &str,
+    embedding_sum: &[u8],
+    count: i64,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO centroids (facet, value, embedding_sum, count) VALUES (?1, ?2, ?3, ?4) \
+         ON CONFLICT(facet, value) DO UPDATE SET embedding_sum=excluded.embedding_sum, count=excluded.count",
+        turso::params![facet, value, embedding_sum, count],
+    )
+    .await?;
+    Ok(())
+}
+
+#[cfg(feature = "search")]
+pub async fn get_all_centroids(conn: &Connection) -> Result<Vec<CentroidRow>> {
+    let mut rows = conn
+        .query("SELECT facet, value, embedding_sum, count FROM centroids", ())
+        .await?;
+    let mut results = Vec::new();
+    while let Some(row) = rows.next().await? {
+        results.push(CentroidRow {
+            facet: row.get_value(0)?.as_text().cloned().unwrap_or_default(),
+            value: row.get_value(1)?.as_text().cloned().unwrap_or_default(),
+            embedding_sum: row.get_value(2)?.as_blob().cloned().unwrap_or_default(),
+            count: row.get_value(3)?.as_integer().copied().unwrap_or(0),
+        });
+    }
+    Ok(results)
+}
+
+#[cfg(feature = "search")]
+pub async fn delete_all_centroids(conn: &Connection) -> Result<()> {
+    conn.execute("DELETE FROM centroids", ()).await?;
+    Ok(())
+}
+
 /// Remove a specific tag from a memory.
 pub async fn remove_tag(conn: &Connection, memory_id: i64, facet: &str, value: &str) -> Result<()> {
     conn.execute(
@@ -775,7 +825,7 @@ pub async fn find_memory_metadata(
 // --- Helpers ---
 
 /// Get all tags for a memory.
-async fn get_tags(conn: &Connection, memory_id: i64) -> Result<Vec<Filter>> {
+pub async fn get_tags(conn: &Connection, memory_id: i64) -> Result<Vec<Filter>> {
     let mut rows = conn
         .query(
             "SELECT facet, value FROM tags WHERE memory_id = ?1 ORDER BY facet, value",
@@ -792,7 +842,7 @@ async fn get_tags(conn: &Connection, memory_id: i64) -> Result<Vec<Filter>> {
 }
 
 /// Batch-fetch tags for multiple memories in a single query.
-async fn get_tags_batch(conn: &Connection, memory_ids: &[i64]) -> Result<std::collections::HashMap<i64, Vec<Filter>>> {
+pub async fn get_tags_batch(conn: &Connection, memory_ids: &[i64]) -> Result<std::collections::HashMap<i64, Vec<Filter>>> {
     use std::collections::HashMap;
 
     if memory_ids.is_empty() {

@@ -12,6 +12,8 @@ use fuser::{
 
 #[cfg(feature = "search")]
 use crate::embeddings::Embedder;
+#[cfg(feature = "search")]
+use crate::{engine, settings};
 use crate::path;
 use crate::{db, queries};
 
@@ -36,6 +38,10 @@ pub struct MemfsFs {
     read_cache: RwLock<HashMap<u64, Vec<u8>>>,
     #[cfg(feature = "search")]
     embedder: Option<Embedder>,
+    #[cfg(feature = "search")]
+    autotag_threshold: f32,
+    #[cfg(feature = "search")]
+    autotag_min_memories: usize,
 
     uid: u32,
     gid: u32,
@@ -545,18 +551,14 @@ impl Filesystem for MemfsFs {
                         #[cfg(feature = "search")]
                         if !content.is_empty() {
                             if let Some(ref embedder) = self.embedder {
-                                if let Ok(emb) = embedder.embed(&content) {
-                                    let bytes = Embedder::serialize_embedding(&emb);
-                                    let _ = rt.block_on(async {
-                                        queries::upsert_embedding(
-                                            conn,
-                                            id,
-                                            &bytes,
-                                            embedder.model_version(),
-                                        )
-                                        .await
-                                    });
-                                }
+                                let threshold = self.autotag_threshold;
+                                let min_memories = self.autotag_min_memories;
+                                rt.block_on(async {
+                                    engine::embed_and_autotag(
+                                        conn, embedder, id, &content,
+                                        threshold, min_memories,
+                                    ).await;
+                                });
                             }
                         }
                         reply.ok()
@@ -877,6 +879,9 @@ pub fn mount(
     #[cfg(feature = "search")]
     let embedder = Embedder::try_load().unwrap_or(None);
 
+    #[cfg(feature = "search")]
+    let settings = settings::load(db_path);
+
     let uid = unsafe { libc::getuid() };
     let gid = unsafe { libc::getgid() };
 
@@ -897,6 +902,10 @@ pub fn mount(
         read_cache: RwLock::new(HashMap::new()),
         #[cfg(feature = "search")]
         embedder,
+        #[cfg(feature = "search")]
+        autotag_threshold: settings.autotag_threshold,
+        #[cfg(feature = "search")]
+        autotag_min_memories: settings.autotag_min_memories,
         uid,
         gid,
     };

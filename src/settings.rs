@@ -6,6 +6,10 @@ use crate::util;
 const DEFAULT_SEARCH_THRESHOLD: f32 = 0.3;
 #[cfg(feature = "search")]
 const DEFAULT_SEARCH_LIMIT: usize = 10;
+#[cfg(feature = "search")]
+const DEFAULT_AUTOTAG_THRESHOLD: f32 = 0.5;
+#[cfg(feature = "search")]
+const DEFAULT_AUTOTAG_MIN_MEMORIES: usize = 3;
 
 /// MemFS settings loaded from .memfs/settings.json.
 pub struct Settings {
@@ -15,6 +19,10 @@ pub struct Settings {
     pub search_threshold: f32,
     #[cfg(feature = "search")]
     pub search_limit: usize,
+    #[cfg(feature = "search")]
+    pub autotag_threshold: f32,
+    #[cfg(feature = "search")]
+    pub autotag_min_memories: usize,
 }
 
 impl Default for Settings {
@@ -26,6 +34,10 @@ impl Default for Settings {
             search_threshold: DEFAULT_SEARCH_THRESHOLD,
             #[cfg(feature = "search")]
             search_limit: DEFAULT_SEARCH_LIMIT,
+            #[cfg(feature = "search")]
+            autotag_threshold: DEFAULT_AUTOTAG_THRESHOLD,
+            #[cfg(feature = "search")]
+            autotag_min_memories: DEFAULT_AUTOTAG_MIN_MEMORIES,
         }
     }
 }
@@ -58,6 +70,13 @@ pub fn load(db_path: &str) -> Settings {
         #[cfg(feature = "search")]
         search_limit: extract_number::<usize>(&content, "search_limit")
             .unwrap_or(DEFAULT_SEARCH_LIMIT),
+        #[cfg(feature = "search")]
+        autotag_threshold: extract_number(&content, "autotag_threshold")
+            .filter(|&t: &f32| (0.0..=1.0).contains(&t))
+            .unwrap_or(DEFAULT_AUTOTAG_THRESHOLD),
+        #[cfg(feature = "search")]
+        autotag_min_memories: extract_number::<usize>(&content, "autotag_min_memories")
+            .unwrap_or(DEFAULT_AUTOTAG_MIN_MEMORIES),
     }
 }
 

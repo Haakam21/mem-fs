@@ -164,6 +164,7 @@ pub async fn sync(db_path: &str, settings: &Settings) -> Result<()> {
         merged_count, local_memories.len(), remote_only.len());
 
     conn.execute("BEGIN", ()).await?;
+    conn.execute("DELETE FROM centroids", ()).await?;
     conn.execute("DELETE FROM embeddings", ()).await?;
     conn.execute("DELETE FROM tags", ()).await?;
     conn.execute("DELETE FROM memories", ()).await?;
@@ -396,6 +397,18 @@ async fn create_tables(conn: &Connection) -> Result<()> {
             embedding BLOB NOT NULL,
             model_version TEXT NOT NULL DEFAULT 'all-MiniLM-L6-v2',
             FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
+        )",
+        (),
+    )
+    .await?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS centroids (
+            facet TEXT NOT NULL,
+            value TEXT NOT NULL,
+            embedding_sum BLOB NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (facet, value)
         )",
         (),
     )

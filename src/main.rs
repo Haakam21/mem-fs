@@ -716,6 +716,10 @@ async fn run_command(command: Commands) {
         mount_point(),
         #[cfg(feature = "search")]
         embedder,
+        #[cfg(feature = "search")]
+        settings.autotag_threshold,
+        #[cfg(feature = "search")]
+        settings.autotag_min_memories,
     );
 
     let result = match command {
