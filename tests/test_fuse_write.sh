@@ -19,7 +19,7 @@
 #
 # Skips gracefully when FUSE or libfuse isn't available (CI without fuse).
 
-set -u
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 MEMFS="$SCRIPT_DIR/target/release/memfs"
@@ -33,6 +33,20 @@ FAIL=0
 
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
+
+# Poll for up to 5 s for the FUSE mount to come up. Mirrors the Rust
+# `is_fuse_mounted` helper so both sides agree on what "mounted" means.
+wait_for_fuse_mount() {
+    local target="$1"
+    for _ in $(seq 1 50); do
+        if grep -qs "$target.*fuse" /proc/self/mountinfo 2>/dev/null \
+           || mount 2>/dev/null | grep -F " on $target " | grep -q "fuse"; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
+}
 
 cleanup() {
     [ -n "${MOUNT_PID:-}" ] && kill "$MOUNT_PID" 2>/dev/null
@@ -62,12 +76,9 @@ echo
 # --- Mount via the daemon ---
 "$MEMFS" mount -f "$FUSE_MP" >"$TEST_DIR/mount.log" 2>&1 &
 MOUNT_PID=$!
-sleep 2
 
-# Verify it's actually a FUSE mount, not just a readable directory.
-if ! grep -qs "$FUSE_MP.*fuse" /proc/self/mountinfo 2>/dev/null \
-   && ! mount 2>/dev/null | grep -q "$FUSE_MP"; then
-    echo "SKIP: FUSE mount did not come up"
+if ! wait_for_fuse_mount "$FUSE_MP"; then
+    echo "SKIP: FUSE mount did not come up within 5s"
     echo "--- mount log ---"
     cat "$TEST_DIR/mount.log"
     exit 0
@@ -93,10 +104,9 @@ fi
 echo "Test 2: memory is in the index"
 # `memfs find` and the daemon share the same db, so we need a read-only
 # client. Stop the daemon briefly to release the lock.
-kill "$MOUNT_PID" 2>/dev/null
-wait "$MOUNT_PID" 2>/dev/null
+kill "$MOUNT_PID" 2>/dev/null || true
+wait "$MOUNT_PID" 2>/dev/null || true
 MOUNT_PID=""
-sleep 0.3
 
 find_output=$("$MEMFS" find --name "fuse_write_test*" 2>&1)
 if echo "$find_output" | grep -q "fuse_write_test.md"; then
@@ -126,9 +136,12 @@ fi
 echo "Test 5: memory survives remount"
 "$MEMFS" mount -f "$FUSE_MP" >"$TEST_DIR/mount2.log" 2>&1 &
 MOUNT_PID=$!
-sleep 2
 
-if [ -f "$FUSE_MP/topics/fuse_write_test.md" ]; then
+if ! wait_for_fuse_mount "$FUSE_MP"; then
+    echo "--- remount log ---"
+    cat "$TEST_DIR/mount2.log"
+    fail "remount did not come up within 5s"
+elif [ -f "$FUSE_MP/topics/fuse_write_test.md" ]; then
     pass "file visible after remount"
 else
     fail "file not visible after remount"

@@ -18,6 +18,11 @@ const DEFAULT_MOUNT: &str = "/memories";
 const DEFAULT_STATE: &str = "~/.memfs/state";
 const DEFAULT_DB: &str = "~/.memfs/db";
 
+/// Facet categories seeded by `memfs init` on a fresh install. Referenced by
+/// both the legacy-backing-dir cleanup and the db-seeding step so they can't
+/// drift apart.
+const DEFAULT_FACETS: &[&str] = &["people", "topics", "dates", "projects", "sessions"];
+
 fn mount_point() -> String {
     env::var("MEMFS_MOUNT").unwrap_or_else(|_| DEFAULT_MOUNT.to_string())
 }
@@ -73,8 +78,10 @@ fn is_fuse_mounted(path: &std::path::Path) -> bool {
     }
     #[cfg(target_os = "macos")]
     {
-        // On macOS fall back to mount(8) — `mount` lists active mounts with
-        // their type in parens.
+        // On macOS fall back to mount(8), whose output line format is:
+        //     <device> on <mount-point> (<type>, <options>...)
+        // Split on " on " and "(" so a mountpoint of `/m` doesn't match a
+        // parallel mount at `/m-old`.
         let Ok(output) = std::process::Command::new("mount").output() else {
             return false;
         };
@@ -82,9 +89,18 @@ fn is_fuse_mounted(path: &std::path::Path) -> bool {
             Some(s) => s,
             None => return false,
         };
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .any(|line| line.contains(target_str) && (line.contains("(osxfuse") || line.contains("(macfuse") || line.contains("(fuse")))
+        String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+            let Some(after_on) = line.split(" on ").nth(1) else {
+                return false;
+            };
+            let Some((mountpoint, paren_tail)) = after_on.split_once(" (") else {
+                return false;
+            };
+            mountpoint == target_str
+                && (paren_tail.starts_with("osxfuse")
+                    || paren_tail.starts_with("macfuse")
+                    || paren_tail.starts_with("fuse"))
+        })
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -390,55 +406,46 @@ echo user_allow_other | sudo tee -a /etc/fuse.conf\n\nThen re-run `memfs init`."
         stop_mount(&global_mount);
         std::fs::create_dir_all(&global_mount)?;
 
-        // Clean any legacy facet directories from older init versions that
-        // seeded them as real files on the backing fs. Those shadow FUSE's
-        // own view and cause writes to fall through to the backing dir
-        // when the mount fails or isn't active yet.
-        for facet in ["people", "topics", "dates", "projects", "sessions"] {
+        // Older init versions seeded facet categories as real directories on
+        // the backing fs; they shadow FUSE's virtual view when the mount is
+        // absent and cause writes to land in unindexed backing files.
+        for facet in DEFAULT_FACETS {
             let _ = std::fs::remove_dir_all(global_mount.join(facet));
         }
 
-        // Seed facet categories in the DB BEFORE starting the FUSE daemon
-        // (the daemon holds an exclusive lock on the db once running). This
-        // populates the facets TABLE, not the filesystem — the FUSE daemon
-        // serves facet dirs dynamically from that table, so they don't
-        // become persistent backing dirs that shadow the mount.
-        {
-            let rt = tokio::runtime::Runtime::new()?;
-            let database = rt.block_on(db::open(&db_path.to_string_lossy()))?;
+        // Seed facets in the db before starting the daemon — the daemon
+        // takes an exclusive lock on the db once running, so this is our
+        // only unlocked window.
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async {
+            let database = db::open(&db_path.to_string_lossy()).await?;
             let conn = database.connect()?;
-            rt.block_on(async {
-                let _ = db::migrate(&conn).await;
-                for facet in ["people", "topics", "dates", "projects", "sessions"] {
-                    let _ = queries::create_facet(&conn, facet).await;
-                }
-            });
-        }
+            db::migrate(&conn).await?;
+            for facet in DEFAULT_FACETS {
+                queries::create_facet(&conn, facet).await?;
+            }
+            anyhow::Ok(())
+        })?;
 
         let memfs_bin = dirs_self();
         eprintln!("Starting FUSE daemon...");
 
         install_service(&memfs_bin, &global_mount, &db_path)?;
 
-        // Poll for up to 5 seconds, verifying the mount is actually a FUSE
-        // filesystem (not just a readable directory). Bail loudly if the
-        // daemon failed to mount — silent failure is how writes end up in
-        // an unindexed backing directory.
-        let mut mounted = false;
-        for _ in 0..50 {
-            if is_fuse_mounted(&global_mount) {
-                mounted = true;
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        if !mounted {
-            anyhow::bail!(
-                "FUSE mount at {} did not come up after 5 seconds. \
+        let poll_interval = std::time::Duration::from_millis(100);
+        let poll_timeout = std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + poll_timeout;
+        while !is_fuse_mounted(&global_mount) {
+            if std::time::Instant::now() >= deadline {
+                anyhow::bail!(
+                    "FUSE mount at {} did not come up within {:?}. \
 Check `journalctl --user -u memfs.service` for the cause. \
 Common fix on Linux: `echo user_allow_other | sudo tee -a /etc/fuse.conf`.",
-                global_mount.display()
-            );
+                    global_mount.display(),
+                    poll_timeout
+                );
+            }
+            std::thread::sleep(poll_interval);
         }
         eprintln!("Mounted at {}", global_mount.display());
     } else {
@@ -769,18 +776,7 @@ fn stop_mount(mount_path: &std::path::Path) {
             let _ = std::process::Command::new("kill").arg(pid.trim()).status();
         }
     }
-    if cfg!(target_os = "macos") {
-        let _ = std::process::Command::new("umount")
-            .arg(mount_path)
-            .stderr(std::process::Stdio::null())
-            .status();
-    } else {
-        let _ = std::process::Command::new("fusermount")
-            .arg("-u")
-            .arg(mount_path)
-            .stderr(std::process::Stdio::null())
-            .status();
-    }
+    fuse::lazy_unmount(mount_path);
     std::thread::sleep(std::time::Duration::from_secs(1));
 }
 
