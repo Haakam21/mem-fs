@@ -158,8 +158,8 @@ Memories are automatically tagged based on centroid matching. When a memory is w
 ### Prerequisites
 
 - **macOS:** macFUSE (`brew install macfuse` or macfuse.io) + kernel extension approval in System Settings > Privacy & Security
-- **Linux:** `apt install libfuse-dev` or `dnf install fuse-devel`
-- **Build:** `PKG_CONFIG_PATH="/usr/local/lib/pkgconfig" cargo build --release`
+- **Linux runtime:** `apt install fuse3` (or `dnf install fuse3`) AND `user_allow_other` set in `/etc/fuse.conf`. The daemon uses `MountOption::AutoUnmount`, which `fuser` silently implements by enabling `allow_other`, which `fusermount3` gates behind `user_allow_other`. `memfs init` checks this upfront on Linux and bails with the exact `echo user_allow_other | sudo tee -a /etc/fuse.conf` fix if missing.
+- **Linux build:** `apt install libfuse3-dev pkg-config libssl-dev` (or distro equivalent), then `PKG_CONFIG_PATH="/usr/local/lib/pkgconfig" cargo build --release`
 
 ### FUSE Architecture (`src/fuse.rs`)
 
@@ -182,6 +182,8 @@ Memories are automatically tagged based on centroid matching. When a memory is w
 - Untagged files allowed at root level — root is the "inbox"
 - `rename()` deletes existing target (Unix semantics) to prevent duplicate memories from atomic writes
 - Single daemon at `~/.memfs/mount`, project directories symlink `./memories → ~/.memfs/mount`
+- `init` verifies FUSE actually mounted via `/proc/self/mountinfo` (Linux) / `mount(8)` (macOS) — **not** `read_dir().is_ok()`, which returns true for any readable directory and masked a pre-0.12.2 silent crash-loop. Polls for up to 5 s after `install_service()` and bails with a diagnostic if no fuse-type mount appears
+- `init` seeds facet categories in the `facets` DB table, not as real directories on the backing fs. Older inits created real `people/ topics/ dates/ projects/ sessions/` dirs under `~/.memfs/mount`, which shadowed FUSE's virtual view when the mount was stale and caused writes to land in unindexed backing files. `init` now `remove_dir_all`'s those legacy dirs on the next run
 
 ## Cloud Sync
 

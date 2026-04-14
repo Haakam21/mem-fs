@@ -100,6 +100,42 @@ struct Cli {
     command: Commands,
 }
 
+#[cfg(test)]
+mod is_fuse_mounted_tests {
+    use super::is_fuse_mounted;
+    use std::path::PathBuf;
+
+    #[test]
+    fn returns_false_for_nonexistent_path() {
+        let path = PathBuf::from("/nonexistent/memfs/mount/path/abc123");
+        assert!(!is_fuse_mounted(&path));
+    }
+
+    #[test]
+    fn returns_false_for_plain_directory() {
+        // /tmp exists on every supported platform and is not a FUSE mount.
+        let path = PathBuf::from("/tmp");
+        assert!(!is_fuse_mounted(&path));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn returns_false_for_non_mounted_dir_with_content() {
+        // Create a real, non-empty directory and confirm we don't mistake
+        // it for a FUSE mount just because read_dir would succeed on it.
+        // This is the exact bug that caused the pre-0.12.2 silent failure.
+        let dir = std::env::temp_dir().join(format!(
+            "memfs-is-fuse-mounted-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(dir.join("topics"));
+        let _ = std::fs::write(dir.join("topics").join("decoy.md"), "decoy content");
+        let result = is_fuse_mounted(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!result, "is_fuse_mounted returned true for a plain directory");
+    }
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Change virtual working directory

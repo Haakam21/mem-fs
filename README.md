@@ -11,7 +11,7 @@ curl -fsSL https://raw.githubusercontent.com/Haakam21/mem-fs/main/install.sh | b
 
 The first command downloads the binaries. The second sets up everything interactively — prompts for optional Turso Cloud credentials, mounts the filesystem, and configures Claude Code.
 
-Requires macFUSE ([macfuse.io](https://macfuse.io)) on macOS or `apt install fuse3` on Linux.
+Requires macFUSE ([macfuse.io](https://macfuse.io)) on macOS, or `apt install fuse3` plus `user_allow_other` in `/etc/fuse.conf` on Linux (memfs uses `AutoUnmount`, which libfuse3 gates behind `user_allow_other`). `memfs init` checks this upfront and prints the exact `echo ... | sudo tee` fix if it's missing — no silent mount failures.
 
 ## How It Works
 
