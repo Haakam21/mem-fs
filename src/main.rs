@@ -18,10 +18,8 @@ const DEFAULT_MOUNT: &str = "/memories";
 const DEFAULT_STATE: &str = "~/.memfs/state";
 const DEFAULT_DB: &str = "~/.memfs/db";
 
-/// Facet categories seeded by `memfs init` on a fresh install. Referenced by
-/// both the legacy-backing-dir cleanup and the db-seeding step so they can't
-/// drift apart.
-const DEFAULT_FACETS: &[&str] = &["people", "topics", "dates", "projects", "sessions"];
+/// Facet categories seeded by `memfs init` on a fresh install.
+const DEFAULT_FACETS: &[&str] = &["people", "topics", "projects", "sessions"];
 
 fn mount_point() -> String {
     env::var("MEMFS_MOUNT").unwrap_or_else(|_| DEFAULT_MOUNT.to_string())
@@ -404,14 +402,13 @@ echo user_allow_other | sudo tee -a /etc/fuse.conf\n\nThen re-run `memfs init`."
         }
 
         stop_mount(&global_mount);
-        std::fs::create_dir_all(&global_mount)?;
 
-        // Older init versions seeded facet categories as real directories on
-        // the backing fs; they shadow FUSE's virtual view when the mount is
-        // absent and cause writes to land in unindexed backing files.
-        for facet in DEFAULT_FACETS {
-            let _ = std::fs::remove_dir_all(global_mount.join(facet));
-        }
+        // Empty the mount point. FUSE overlays the daemon's virtual view on
+        // top of this directory, so anything real here would shadow the view
+        // whenever the daemon stops. User memories live in the db, not on
+        // the backing fs, so nothing of value is removed.
+        let _ = std::fs::remove_dir_all(&global_mount);
+        std::fs::create_dir_all(&global_mount)?;
 
         // Seed facets in the db before starting the daemon — the daemon
         // takes an exclusive lock on the db once running, so this is our
