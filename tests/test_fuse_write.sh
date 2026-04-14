@@ -28,30 +28,16 @@ export MEMFS_DB="$TEST_DIR/db"
 export MEMFS_STATE="$TEST_DIR/state"
 FUSE_MP="$TEST_DIR/mount"
 
+source "$SCRIPT_DIR/tests/lib/fuse_mount.sh"
+
 PASS=0
 FAIL=0
 
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
-# Poll for up to 5 s for the FUSE mount to come up. Mirrors the Rust
-# `is_fuse_mounted` helper so both sides agree on what "mounted" means.
-wait_for_fuse_mount() {
-    local target="$1"
-    for _ in $(seq 1 50); do
-        if grep -qs "$target.*fuse" /proc/self/mountinfo 2>/dev/null \
-           || mount 2>/dev/null | grep -F " on $target " | grep -q "fuse"; then
-            return 0
-        fi
-        sleep 0.1
-    done
-    return 1
-}
-
 cleanup() {
-    [ -n "${MOUNT_PID:-}" ] && kill "$MOUNT_PID" 2>/dev/null
-    fusermount3 -u -z "$FUSE_MP" 2>/dev/null || fusermount -u -z "$FUSE_MP" 2>/dev/null || umount "$FUSE_MP" 2>/dev/null || true
-    wait 2>/dev/null || true
+    stop_fuse_mount "$FUSE_MP"
     rm -rf "$TEST_DIR"
 }
 trap cleanup EXIT
@@ -74,13 +60,8 @@ echo "=== MemFS FUSE write regression ==="
 echo
 
 # --- Mount via the daemon ---
-"$MEMFS" mount -f "$FUSE_MP" >"$TEST_DIR/mount.log" 2>&1 &
-MOUNT_PID=$!
-
-if ! wait_for_fuse_mount "$FUSE_MP"; then
-    echo "SKIP: FUSE mount did not come up within 5s"
-    echo "--- mount log ---"
-    cat "$TEST_DIR/mount.log"
+if ! start_fuse_mount "$MEMFS" "$FUSE_MP" "$TEST_DIR/mount.log"; then
+    echo "SKIP: FUSE mount did not come up (see log above)"
     exit 0
 fi
 pass "FUSE mount is live"
@@ -102,11 +83,9 @@ fi
 
 # --- Test 2: memory is indexed (visible via memfs find) ---
 echo "Test 2: memory is in the index"
-# `memfs find` and the daemon share the same db, so we need a read-only
-# client. Stop the daemon briefly to release the lock.
-kill "$MOUNT_PID" 2>/dev/null || true
-wait "$MOUNT_PID" 2>/dev/null || true
-MOUNT_PID=""
+# `memfs find` and the daemon share the same db, so we need to release
+# the lock by stopping the daemon before querying.
+stop_fuse_mount "$FUSE_MP"
 
 find_output=$("$MEMFS" find --name "fuse_write_test*" 2>&1)
 if echo "$find_output" | grep -q "fuse_write_test.md"; then
@@ -134,13 +113,8 @@ fi
 
 # --- Test 5: survives remount ---
 echo "Test 5: memory survives remount"
-"$MEMFS" mount -f "$FUSE_MP" >"$TEST_DIR/mount2.log" 2>&1 &
-MOUNT_PID=$!
-
-if ! wait_for_fuse_mount "$FUSE_MP"; then
-    echo "--- remount log ---"
-    cat "$TEST_DIR/mount2.log"
-    fail "remount did not come up within 5s"
+if ! start_fuse_mount "$MEMFS" "$FUSE_MP" "$TEST_DIR/mount2.log"; then
+    fail "remount did not come up"
 elif [ -f "$FUSE_MP/topics/fuse_write_test.md" ]; then
     pass "file visible after remount"
 else

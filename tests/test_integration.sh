@@ -10,6 +10,8 @@ export MEMFS_DB="$TEST_DIR/.memfs/db"
 export MEMFS_STATE="$TEST_DIR/.memfs/state"
 export MEMFS_BIN="$MEMFS"
 
+source "$SCRIPT_DIR/tests/lib/fuse_mount.sh"
+
 # Clean slate
 rm -f "$MEMFS_DB" "$MEMFS_STATE"
 
@@ -267,14 +269,8 @@ SEARCH="$SCRIPT_DIR/target/release/search"
 if [[ -x "$SEARCH" ]] && $MEMFS reindex >/dev/null 2>&1; then
     FUSE_MP="$TEST_DIR/memories"
     rm -rf "$FUSE_MP"
-    mkdir -p "$FUSE_MP"
 
-    # Mount FUSE
-    $MEMFS mount -f "$FUSE_MP" &
-    FUSE_PID=$!
-    sleep 2
-
-    if ls "$FUSE_MP" &>/dev/null; then
+    if start_fuse_mount "$MEMFS" "$FUSE_MP"; then
         # Search binary reads DB while FUSE is running
         output=$(cd "$TEST_DIR" && $SEARCH "birthday celebration" 2>&1)
         assert_contains "standalone search finds birthday" "birthday" "$output"
@@ -286,12 +282,10 @@ if [[ -x "$SEARCH" ]] && $MEMFS reindex >/dev/null 2>&1; then
         # Verify score is shown
         output=$(cd "$TEST_DIR" && $SEARCH -t 0.0 "cake" 2>&1)
         assert_contains "search shows score" "(" "$output"
-
-        umount "$FUSE_MP" 2>/dev/null || true
     else
         echo "  SKIP: FUSE mount failed"
     fi
-    kill $FUSE_PID 2>/dev/null; wait $FUSE_PID 2>/dev/null
+    stop_fuse_mount "$FUSE_MP"
     rm -rf "$FUSE_MP"
 else
     echo "  SKIP: search binary or embedding model not available"

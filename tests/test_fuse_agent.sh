@@ -32,8 +32,10 @@ export MEMFS_DB="/tmp/memfs_fuse_agent_test.db"
 export MEMFS_STATE="/tmp/memfs_fuse_agent_test_cwd"
 FUSE_MP="/tmp/memfs_agent_test_mount"
 
+source "$SCRIPT_DIR/tests/lib/fuse_mount.sh"
+
 # --- Cleanup from previous runs ---
-umount "$FUSE_MP" 2>/dev/null || true
+stop_fuse_mount "$FUSE_MP"
 rm -f "$MEMFS_DB" "$MEMFS_STATE"
 rm -rf "$FUSE_MP"
 
@@ -107,14 +109,8 @@ $MEMFS write dad_woodworking.md "Dad showed me the bookshelf he built in his wor
 tag dad_woodworking.md dates/2025-01 emotions/grateful locations/home
 
 echo "=== Mounting FUSE at $FUSE_MP ==="
-$MEMFS mount -f "$FUSE_MP" &
-MOUNT_PID=$!
-sleep 2
-
-# Verify mount
-if ! ls "$FUSE_MP" >/dev/null 2>&1; then
+if ! start_fuse_mount "$MEMFS" "$FUSE_MP"; then
   echo "ERROR: FUSE mount failed"
-  kill $MOUNT_PID 2>/dev/null
   exit 1
 fi
 
@@ -159,7 +155,5 @@ fi
 
 # --- Cleanup ---
 echo "=== Unmounting ==="
-umount "$FUSE_MP" 2>/dev/null || true
-kill $MOUNT_PID 2>/dev/null || true
-wait $MOUNT_PID 2>/dev/null || true
+stop_fuse_mount "$FUSE_MP"
 echo "=== Done ==="
