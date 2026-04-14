@@ -197,38 +197,63 @@ fn init() -> anyhow::Result<()> {
 
     std::fs::create_dir_all(&data_dir)?;
 
-    // --- Cloud sync (optional, only on first init) ---
+    // --- Cloud sync (always prompt; blank input keeps existing values) ---
     let settings_path = data_dir.join("settings.json");
-    if !settings_path.exists() {
-        eprint!("Turso URL (Enter to skip): ");
-        let mut turso_url = String::new();
-        std::io::stdin().read_line(&mut turso_url)?;
-        let turso_url = turso_url.trim().to_string();
+    let db_path_str = data_dir.join("db").to_string_lossy().into_owned();
+    let existing = crate::settings::load(&db_path_str);
+    let existing_url = existing.turso_url;
+    let existing_token = existing.turso_token;
 
-        if !turso_url.is_empty() {
-            eprint!("Turso token: ");
-            let mut turso_token = String::new();
-            std::io::stdin().read_line(&mut turso_token)?;
-            let turso_token = turso_token.trim().to_string();
+    let url_hint = if existing_url.is_some() {
+        "Enter to keep"
+    } else {
+        "Enter to skip"
+    };
+    eprint!("Turso URL ({}): ", url_hint);
+    let mut turso_url_input = String::new();
+    std::io::stdin().read_line(&mut turso_url_input)?;
+    let turso_url_input = turso_url_input.trim().to_string();
 
-            if !turso_token.is_empty() {
-                let json = format!(
-                    "{{\"turso_url\":\"{}\",\"turso_token\":\"{}\"}}",
-                    turso_url, turso_token
-                );
-                std::fs::write(&settings_path, &json)?;
+    let turso_url = if turso_url_input.is_empty() {
+        existing_url
+    } else {
+        Some(turso_url_input)
+    };
 
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(
-                        &settings_path,
-                        std::fs::Permissions::from_mode(0o600),
-                    )?;
-                }
+    if let Some(url) = turso_url {
+        let token_hint = if existing_token.is_some() {
+            "Enter to keep"
+        } else {
+            "required"
+        };
+        eprint!("Turso token ({}): ", token_hint);
+        let mut turso_token_input = String::new();
+        std::io::stdin().read_line(&mut turso_token_input)?;
+        let turso_token_input = turso_token_input.trim().to_string();
 
-                eprintln!("Cloud sync configured.");
+        let turso_token = if turso_token_input.is_empty() {
+            existing_token
+        } else {
+            Some(turso_token_input)
+        };
+
+        if let Some(token) = turso_token {
+            let json = format!(
+                "{{\"turso_url\":\"{}\",\"turso_token\":\"{}\"}}",
+                url, token
+            );
+            std::fs::write(&settings_path, &json)?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(
+                    &settings_path,
+                    std::fs::Permissions::from_mode(0o600),
+                )?;
             }
+
+            eprintln!("Cloud sync configured.");
         }
     }
 

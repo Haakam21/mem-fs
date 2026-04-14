@@ -74,6 +74,8 @@ Sync memories across machines via [Turso Cloud](https://turso.tech). Run `memfs 
 }
 ```
 
+`memfs init` is re-runnable — it prompts for URL and token every time, and blank input keeps the existing value. To rotate credentials without editing `settings.json` by hand, re-run `memfs init` (or pipe new values in) and only the fields you supply are overwritten.
+
 Run `~/.memfs/memfs sync` to pull remote changes, merge, and push. FUSE runs local-only for reliability; sync is a separate step.
 
 Sync uses **merge semantics**: memories with unique filenames are auto-merged from both sides. If two agents wrote different content under the same filename, the local version is kept and the remote version is saved to `~/.memfs/conflicts/` for manual reconciliation. After resolving conflicts, run `memfs sync` again.
