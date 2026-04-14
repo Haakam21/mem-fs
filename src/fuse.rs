@@ -526,6 +526,64 @@ impl Filesystem for MemfsFs {
         }
     }
 
+    /// `flush` is called on every `close(2)` and the kernel **waits** for
+    /// our reply before returning to userspace. `release` is async — the
+    /// kernel does not wait for it before close() returns, so a daemon
+    /// killed between `echo > file` and the next command can drop a
+    /// release-pending buffer before it's been written to the db. Persist
+    /// the buffer here (synchronously, by content copy so release can
+    /// still tear it down).
+    fn flush(
+        &mut self,
+        _req: &Request,
+        ino: u64,
+        fh: u64,
+        _lock_owner: u64,
+        reply: ReplyEmpty,
+    ) {
+        if ino < FILE_INODE_BASE {
+            reply.ok();
+            return;
+        }
+        let data = match self.write_buffers.read().unwrap().get(&fh) {
+            Some(buf) => buf.clone(),
+            None => {
+                reply.ok();
+                return;
+            }
+        };
+        let id = Self::memory_id(ino);
+        let content = String::from_utf8_lossy(&data);
+        let conn = &self.conn;
+        let rt = &self.runtime;
+        if rt
+            .block_on(async { queries::update_memory_content(conn, id, &content).await })
+            .is_err()
+        {
+            reply.error(libc::EIO);
+            return;
+        }
+        #[cfg(feature = "search")]
+        if !content.is_empty() {
+            if let Some(ref embedder) = self.embedder {
+                let threshold = self.autotag_threshold;
+                let min_memories = self.autotag_min_memories;
+                rt.block_on(async {
+                    engine::embed_and_autotag(
+                        conn,
+                        embedder,
+                        id,
+                        &content,
+                        threshold,
+                        min_memories,
+                    )
+                    .await;
+                });
+            }
+        }
+        reply.ok();
+    }
+
     fn release(
         &mut self,
         _req: &Request,
@@ -538,34 +596,16 @@ impl Filesystem for MemfsFs {
     ) {
         let buffer = self.write_buffers.write().unwrap().remove(&fh);
         self.read_cache.write().unwrap().remove(&fh);
+        // Persist any post-flush writes (rare: caller wrote after the last
+        // close-triggered flush but before release). flush() already
+        // persisted the common case; this is a safety net.
         if let Some(data) = buffer {
-            if ino >= FILE_INODE_BASE {
+            if ino >= FILE_INODE_BASE && !data.is_empty() {
                 let id = Self::memory_id(ino);
                 let content = String::from_utf8_lossy(&data);
-                let conn = &self.conn;
-                let rt = &self.runtime;
-                match rt.block_on(async {
-                    queries::update_memory_content(conn, id, &content).await
-                }) {
-                    Ok(()) => {
-                        #[cfg(feature = "search")]
-                        if !content.is_empty() {
-                            if let Some(ref embedder) = self.embedder {
-                                let threshold = self.autotag_threshold;
-                                let min_memories = self.autotag_min_memories;
-                                rt.block_on(async {
-                                    engine::embed_and_autotag(
-                                        conn, embedder, id, &content,
-                                        threshold, min_memories,
-                                    ).await;
-                                });
-                            }
-                        }
-                        reply.ok()
-                    }
-                    Err(_) => reply.error(libc::EIO),
-                }
-                return;
+                let _ = self.runtime.block_on(async {
+                    queries::update_memory_content(&self.conn, id, &content).await
+                });
             }
         }
         reply.ok();

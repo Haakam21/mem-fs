@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use memfs::embeddings::Embedder;
 use memfs::queries::SearchResult;
-use memfs::settings;
+use memfs::{settings, util};
 
 #[derive(Parser)]
 #[command(name = "search", about = "Search memories by meaning")]
@@ -31,16 +31,13 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
-    // Find the .memfs directory (walk up from CWD)
-    let memfs_dir = match find_memfs_dir() {
-        Some(d) => d,
+    let db_path = match find_db_path() {
+        Some(p) => p,
         None => {
             eprintln!("search: no .memfs directory found");
             std::process::exit(1);
         }
     };
-
-    let db_path = memfs_dir.join("db");
     let settings = settings::load(db_path.to_str().unwrap_or(""));
     let threshold = args.threshold.unwrap_or(settings.search_threshold);
     let limit = args.limit.unwrap_or(settings.search_limit);
@@ -142,12 +139,35 @@ fn main() {
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
-/// Find the .memfs data directory at ~/.memfs/
-fn find_memfs_dir() -> Option<PathBuf> {
+/// Find the memfs database file. Resolution order, matching the memfs CLI:
+///   1. `MEMFS_DB` environment variable (expanded for `~`). Required for
+///      integration tests that use an isolated database outside $HOME.
+///   2. Walk up from the current directory looking for a `.memfs/db` file —
+///      supports per-project databases.
+///   3. `$HOME/.memfs/db` — the default shared location set up by init.
+fn find_db_path() -> Option<PathBuf> {
+    if let Ok(raw) = std::env::var("MEMFS_DB") {
+        if !raw.is_empty() {
+            let path = PathBuf::from(util::expand_tilde(&raw));
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+    let mut cwd = std::env::current_dir().ok()?;
+    loop {
+        let candidate = cwd.join(".memfs").join("db");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        if !cwd.pop() {
+            break;
+        }
+    }
     let home = std::env::var("HOME").ok()?;
-    let dir = PathBuf::from(home).join(".memfs");
-    if dir.is_dir() {
-        Some(dir)
+    let default = PathBuf::from(home).join(".memfs").join("db");
+    if default.exists() {
+        Some(default)
     } else {
         None
     }

@@ -238,7 +238,7 @@ $MEMFS cd /memories
 output=$($MEMFS cat nonexistent.md 2>&1)
 exit_code=$?
 assert_exit_code "cat nonexistent fails" "1" "$exit_code"
-assert_contains "cat error message" "No such memory" "$output"
+assert_contains "cat error message" "no such memory" "$output"
 
 echo
 
