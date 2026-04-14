@@ -30,6 +30,69 @@ fn db_path() -> String {
     env::var("MEMFS_DB").unwrap_or_else(|_| DEFAULT_DB.to_string())
 }
 
+/// Check whether `path` is an active FUSE mount by consulting the kernel's
+/// mount table. `read_dir().is_ok()` lies — it succeeds even when the
+/// directory is a plain backing dir with no FUSE filesystem over it.
+fn is_fuse_mounted(path: &std::path::Path) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let target = match path.canonicalize() {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        let target_str = match target.to_str() {
+            Some(s) => s,
+            None => return false,
+        };
+        let mounts = match std::fs::read_to_string("/proc/self/mountinfo") {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        // /proc/self/mountinfo format: field 5 is mountpoint, field 9 is fstype (varies).
+        // We look for any line whose mountpoint matches our target AND whose filesystem
+        // type contains "fuse".
+        for line in mounts.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 10 {
+                continue;
+            }
+            let mountpoint = parts[4];
+            if mountpoint != target_str {
+                continue;
+            }
+            // Fields after " - " separator: fstype, source, super_options
+            if let Some(dash_idx) = parts.iter().position(|&p| p == "-") {
+                if let Some(fstype) = parts.get(dash_idx + 1) {
+                    if fstype.starts_with("fuse") {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // On macOS fall back to mount(8) — `mount` lists active mounts with
+        // their type in parens.
+        let Ok(output) = std::process::Command::new("mount").output() else {
+            return false;
+        };
+        let target_str = match path.to_str() {
+            Some(s) => s,
+            None => return false,
+        };
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line.contains(target_str) && (line.contains("(osxfuse") || line.contains("(macfuse") || line.contains("(fuse")))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = path;
+        false
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "memfs", about = "Virtual faceted memory filesystem")]
 struct Cli {
@@ -259,39 +322,89 @@ fn init() -> anyhow::Result<()> {
 
     // --- Mount daemon (shared, only start if not already running) ---
     let db_path = data_dir.join("db");
-    // Check if mount is alive by trying to list it AND verifying a mount process exists
-    let already_mounted = std::fs::read_dir(&global_mount).is_ok()
-        && std::process::Command::new("pgrep")
-            .args(["-f", "memfs mount"])
-            .output()
-            .map(|o| !o.stdout.is_empty())
-            .unwrap_or(false);
+    let already_mounted = is_fuse_mounted(&global_mount);
 
     if !already_mounted {
+        // On Linux, the FUSE daemon needs `user_allow_other` in
+        // /etc/fuse.conf because fuser's AutoUnmount implicitly enables
+        // allow_other. Without it, fusermount3 rejects the mount and the
+        // systemd service crash-loops silently — callers then write to
+        // the backing directory thinking it's the mount. Check upfront
+        // with a clear error instead.
+        #[cfg(target_os = "linux")]
+        {
+            let fuse_conf_path = std::path::Path::new("/etc/fuse.conf");
+            let has_user_allow_other = std::fs::read_to_string(fuse_conf_path)
+                .map(|s| {
+                    s.lines().any(|line| {
+                        let trimmed = line.trim();
+                        !trimmed.starts_with('#') && trimmed == "user_allow_other"
+                    })
+                })
+                .unwrap_or(false);
+            if !has_user_allow_other {
+                anyhow::bail!(
+                    "/etc/fuse.conf is missing `user_allow_other`, which FUSE \
+requires when the daemon uses AutoUnmount. Enable it with:\n\n    \
+echo user_allow_other | sudo tee -a /etc/fuse.conf\n\nThen re-run `memfs init`."
+                );
+            }
+        }
+
         stop_mount(&global_mount);
         std::fs::create_dir_all(&global_mount)?;
+
+        // Clean any legacy facet directories from older init versions that
+        // seeded them as real files on the backing fs. Those shadow FUSE's
+        // own view and cause writes to fall through to the backing dir
+        // when the mount fails or isn't active yet.
+        for facet in ["people", "topics", "dates", "projects", "sessions"] {
+            let _ = std::fs::remove_dir_all(global_mount.join(facet));
+        }
+
+        // Seed facet categories in the DB BEFORE starting the FUSE daemon
+        // (the daemon holds an exclusive lock on the db once running). This
+        // populates the facets TABLE, not the filesystem — the FUSE daemon
+        // serves facet dirs dynamically from that table, so they don't
+        // become persistent backing dirs that shadow the mount.
+        {
+            let rt = tokio::runtime::Runtime::new()?;
+            let database = rt.block_on(db::open(&db_path.to_string_lossy()))?;
+            let conn = database.connect()?;
+            rt.block_on(async {
+                let _ = db::migrate(&conn).await;
+                for facet in ["people", "topics", "dates", "projects", "sessions"] {
+                    let _ = queries::create_facet(&conn, facet).await;
+                }
+            });
+        }
 
         let memfs_bin = dirs_self();
         eprintln!("Starting FUSE daemon...");
 
         install_service(&memfs_bin, &global_mount, &db_path)?;
-        std::thread::sleep(std::time::Duration::from_secs(3));
 
-        match std::fs::read_dir(&global_mount) {
-            Ok(_) => eprintln!("Mounted at {}", global_mount.display()),
-            Err(e) => anyhow::bail!("Mount failed: {}", e),
-        }
-
-        // Seed facets on first mount
-        let has_entries = std::fs::read_dir(&global_mount)
-            .map(|mut d| d.next().is_some())
-            .unwrap_or(false);
-        if !has_entries {
-            for facet in ["people", "topics", "dates", "projects", "sessions"] {
-                let _ = std::fs::create_dir(global_mount.join(facet));
+        // Poll for up to 5 seconds, verifying the mount is actually a FUSE
+        // filesystem (not just a readable directory). Bail loudly if the
+        // daemon failed to mount — silent failure is how writes end up in
+        // an unindexed backing directory.
+        let mut mounted = false;
+        for _ in 0..50 {
+            if is_fuse_mounted(&global_mount) {
+                mounted = true;
+                break;
             }
-            eprintln!("Seeded facets: people/, topics/, dates/, projects/, sessions/");
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
+        if !mounted {
+            anyhow::bail!(
+                "FUSE mount at {} did not come up after 5 seconds. \
+Check `journalctl --user -u memfs.service` for the cause. \
+Common fix on Linux: `echo user_allow_other | sudo tee -a /etc/fuse.conf`.",
+                global_mount.display()
+            );
+        }
+        eprintln!("Mounted at {}", global_mount.display());
     } else {
         eprintln!("FUSE daemon already running.");
     }

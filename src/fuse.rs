@@ -912,13 +912,32 @@ pub fn mount(
 
     std::fs::create_dir_all(fuse_mountpoint)?;
 
-    // Clean up any stale mount before mounting (handles crash recovery)
+    // Clean up any stale mount before mounting. AutoUnmount handles this
+    // on clean exit, but a SIGKILL or OOM can still leave the kernel mount
+    // entry behind — fusermount{3} -u -z lazy-unmounts it.
     if cfg!(target_os = "macos") {
         let _ = std::process::Command::new("umount").arg(fuse_mountpoint).status();
     } else {
-        let _ = std::process::Command::new("fusermount").arg("-u").arg(fuse_mountpoint).status();
+        let _ = std::process::Command::new("fusermount3")
+            .args(["-u", "-z"])
+            .arg(fuse_mountpoint)
+            .status();
+        let _ = std::process::Command::new("fusermount")
+            .args(["-u", "-z"])
+            .arg(fuse_mountpoint)
+            .status();
     }
 
+    // AutoUnmount cleans up the kernel mount entry when the daemon exits,
+    // so a crashed/killed daemon doesn't leave a stale mount behind.
+    // Without it, recovering needs root (`umount -l`), and fuser's next
+    // mount attempt fails with `File exists (os error 17)`.
+    //
+    // Side effect: fuser implicitly adds `allow_other` when AutoUnmount is
+    // set, which fusermount3 rejects unless `user_allow_other` is in
+    // /etc/fuse.conf. `memfs init` checks for that and bails with a clear
+    // error if missing, so users are told exactly how to fix it instead
+    // of hitting a silent crash-loop.
     let options = vec![
         MountOption::FSName("memfs".to_string()),
         MountOption::AutoUnmount,
